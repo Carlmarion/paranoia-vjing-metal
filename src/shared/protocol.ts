@@ -15,6 +15,18 @@ export interface AudioFrame {
   rawDb: [number, number, number, number]; // low, mid, high, all
 }
 
+/** bandValue (B4.1): 'none' → 0, 'beat' → beat pulse, 'energy' → energy30. */
+export function bandValue(band: Band, frame: AudioFrame): number {
+  switch (band) {
+    case 'low': return frame.low;
+    case 'mid': return frame.mid;
+    case 'high': return frame.high;
+    case 'energy': return frame.energy;
+    case 'beat': return frame.beat;
+    default: return 0;
+  }
+}
+
 /** public/sdf/manifest.json (B2.2) */
 export interface ManifestMotif {
   id: number; file: string; coverage: number; centroid: [number, number]; warnings: string[];

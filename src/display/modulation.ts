@@ -1,22 +1,10 @@
 // B4.1 effective value of every param + B4.3 phase integration. Pure.
-import { PARAMS, PARAM_COUNT, PARAM_INDEX, fromNorm, toNorm, type Band, type ParamDef } from '../shared/params';
-import type { AudioFrame } from '../shared/protocol';
+import { PARAMS, PARAM_COUNT, PARAM_INDEX, fromNorm, toNorm, type ParamDef } from '../shared/params';
+import { bandValue, type AudioFrame } from '../shared/protocol';
 import type { Look, ParamState, Session } from '../shared/state';
 import { clamp01, fract, valueNoise1D } from '../shared/math';
 
 export const PHASE_WRAP = 1000;
-
-/** bandValue (B4.1): 'none' → 0, 'beat' → beat pulse, 'energy' → energy30. */
-export function bandValue(band: Band, frame: AudioFrame): number {
-  switch (band) {
-    case 'low': return frame.low;
-    case 'mid': return frame.mid;
-    case 'high': return frame.high;
-    case 'energy': return frame.energy;
-    case 'beat': return frame.beat;
-    default: return 0;
-  }
-}
 
 /** Threshold gate: 0 below thr, 1 at band = 1. thr ≥ 1 → always 0. */
 export function gate(bandVal: number, thr: number): number {
