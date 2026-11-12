@@ -31,7 +31,7 @@ They talk over `BroadcastChannel('ferro')` (same origin, same Chrome profile, no
 - 60 fps at 1920×1080 on integrated graphics.
 - No network at runtime.
 - Chrome only (latest stable).
-- Flash safety: no full-screen luminance or hue jump more often than 3 times per second (see B6.3, B6.4 and B7.5).
+- Flash safety: by default, no full-screen luminance or hue jump more often than 3 times per second (see B6.3, B6.4 and B7.5). `calib.refractoryMs` can go below the cap; that is Carl's call during testing.
 
 ## A4. Stack (exact)
 
@@ -134,7 +134,7 @@ python tools/bake_sdf.py <in_dir> public/sdf [--cell 512]
 Max 16 motifs. Must finish in under 60 s for 12.
 
 ### B2.3 `tools/make_placeholders.py`
-Generates 4 motifs into `art/placeholders/` with Pillow, obeying B2.1 (round-capped strokes 60–90 px): (1) ring with a cross, (2) four C-scrolls in a square frame, (3) half-circle fan with 7 radial bars, (4) diamond lattice in a frame. Run it and the bake during the build so the app works before any real drawing exists.
+Generates 12 motifs into `art/placeholders/` with Pillow, obeying B2.1 except where stroke weight is the variable: 4 designs, (1) ring with a cross, (2) four C-scrolls in a square frame, (3) half-circle fan with 7 radial bars, (4) diamond lattice in a frame, each drawn at 3 round-capped stroke weights, thin (40 px), medium (70 px) and thick (100 px). Bake warnings on some of them are expected: they exist to test how melts behave between different ink weights. Run it and the bake during the build so the app works before any real drawing exists.
 
 ### B2.4 Texture
 Upload as one `TEXTURE_2D_ARRAY`:
@@ -185,6 +185,7 @@ interface Calib {
   smooth: number;      // 0.25…4, default 1
   floorDb: number;     // −90…−30, default −60: auto-gain floor and silence threshold (B6.3)
   gainDecay: number;   // 4…60 s, default 20: auto-gain peak decay (B6.3)
+  refractoryMs: number; // 150…600, default 340: minimum gap between onsets (B6.3)
 }
 
 interface Preset { name: string; savedAt: number; look: Look; }
@@ -366,7 +367,7 @@ navigator.mediaDevices.getUserMedia({ audio: {
 - **Bands:** RMS of `mag` over bins in low 30–150 Hz, mid 150–2500 Hz, high 2500–12000 Hz, and all 30–12000 Hz.
 - **Auto-gain per band:** `peak = max(raw, peak × exp(−dt / calib.gainDecay))`, `peak = max(peak, floor)` with `floor = 10^(calib.floorDb / 20)`, `norm = min(raw / peak, 1)`. The floor stops silence from being amplified into noise. Both values are set against real signal in M1.
 - **Envelope per band:** `y += (x − y) × (1 − exp(−dt / τ))`, τ = attack when rising, release × `calib.smooth` when falling. Low 10 / 250 ms, mid 25 / 350 ms, high 5 / 150 ms.
-- **Onset:** `flux = Σ max(0, mag_t − mag_{t−1})` over bins 30–200 Hz, divided by the low band's peak. Keep 1.5 s of flux history. Onset when `flux > mean + calib.onsetK × std` AND `flux > 0.05` AND at least 340 ms since the last onset (tracks kicks up to 176 BPM).
+- **Onset:** `flux = Σ max(0, mag_t − mag_{t−1})` over bins 30–200 Hz, divided by the low band's peak. Keep 1.5 s of flux history. Onset when `flux > mean + calib.onsetK × std` AND `flux > 0.05` AND at least `calib.refractoryMs` since the last onset (default 340 ms: tracks kicks up to 176 BPM and keeps beats under 3 per second).
 - **BPM (display and morph timing only):** median of the last 12 inter-onset intervals, each folded into the single octave 0.375–0.75 s (80–160 BPM) by doubling or halving. Default 0.5 s when unknown.
 - **energy30:** all-band RMS normalised by its own peak (decay 60 s), then EMA with τ = 30 s. Initial value 0.5.
 - **silent:** all-band raw RMS below `floor` for 3 s.
@@ -381,7 +382,7 @@ interface AudioFrame {
   rawDb: [number, number, number, number];                   // low, mid, high, all: raw band RMS in dB, for calibration
 }
 ```
-The 340 ms refractory caps beats at 2.9 per second.
+At the default 340 ms refractory, beats are capped at 2.9 per second.
 
 ## B7. Sequencer and autopilot
 
@@ -473,7 +474,7 @@ Dark, low-luminance UI (the laptop must not light the room): background `#0b0b0d
 - Randomize all, Mutate all, Undo, Reset all.
 - Sliders: `autopilot`, `reactMaster`, `xfade`. Select: `presetCycleMin`.
 - Export, Import.
-- Collapsible **Calibration**: input device, `inputGain` (0…4), `onsetK` (0.5…4), `smooth` (0.25…4), `floorDb` (−90…−30), `gainDecay` (4…60 s), and a live readout of `rawDb` per band.
+- Collapsible **Calibration**: input device, `inputGain` (0…4), `onsetK` (0.5…4), `smooth` (0.25…4), `floorDb` (−90…−30), `gainDecay` (4…60 s), `refractoryMs` (150…600), and a live readout of `rawDb` per band.
 
 **Keys** (both windows; the Control forwards them as commands). Keys are ignored while a text field has focus. In the Display, the keypress that starts the AudioContext does only that.
 
