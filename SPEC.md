@@ -200,7 +200,7 @@ Persistence (all `localStorage` access in try/catch; the app must work with stor
 
 ## B4. Parameters (`src/shared/params.ts`)
 
-One table generates: the shader `#define` indices, the default Look, the dashboard rows, and the randomize ranges. Adding a param means adding one row and using `P(NAME)` in the shader.
+One table generates: the shader `#define` indices, the default Look, the dashboard rows, and the randomize ranges. Adding a param means adding one row and using `P_NAME` in the shader.
 
 ### B4.1 Modulation formula (the threshold control)
 
@@ -257,7 +257,7 @@ Units: motif space, the cell is −1…+1. A typical stroke half-width is 0.02�
 | glowWidth | colour | log | 0.02 | 0.4 | 0.12 | none | 0 | 0 | 0.1 | 125 | 0.04–0.3 |
 | grain | colour | lin | 0 | 0.3 | 0.04 | high | 0.3 | 0.3 | 0 | — | 0–0.12 |
 
-30 params → `uniform float uP[30];`. `params.ts` exports the GLSL header (`#define P_ZOOM 0` …, `#define P(n) uP[P_##n]`) that `gl.ts` prepends to the fragment source.
+30 params → `uniform float uP[30];`. `params.ts` exports the GLSL header (`#define P_ZOOM uP[0]`, `#define P_ROTATION uP[1]` …, one line per row, names upper-cased) that `gl.ts` inserts after the `#version` line of the fragment source. GLSL ES has no `##` token pasting, so each name is its own macro.
 
 `waveFreq` is in cycles per motif unit. At 1080p the Nyquist limit is about 230, so values above that alias on purpose: this is the moiré effect.
 
@@ -284,14 +284,14 @@ vec2 s = (gl_FragCoord.xy - 0.5 * uRes) / (0.5 * min(uRes.x, uRes.y));
 vec2 p = s;
 
 // 2. Tilt (perspective skew), mirror, rotate, zoom
-p /= max(1.0 + P(TILTX) * p.x + P(TILTY) * p.y, 0.25);
-if (uMirrorX) p.x = abs(p.x) - P(MIRRORSHIFT);
-if (uMirrorY) p.y = abs(p.y) - P(MIRRORSHIFT);
-p = rot(P(ROTATION) * TAU) * p / P(ZOOM);
+p /= max(1.0 + P_TILTX * p.x + P_TILTY * p.y, 0.25);
+if (uMirrorX) p.x = abs(p.x) - P_MIRRORSHIFT;
+if (uMirrorY) p.y = abs(p.y) - P_MIRRORSHIFT;
+p = rot(P_ROTATION * TAU) * p / P_ZOOM;
 
 // 3. Warp (2-octave value-noise fbm, output 0…1)
-vec2 q = p * P(WARPSCALE) + uWarpPhase;
-p += P(WARPAMT) * (vec2(fbm(q), fbm(q + 17.3)) * 2.0 - 1.0);
+vec2 q = p * P_WARPSCALE + uWarpPhase;
+p += P_WARPAMT * (vec2(fbm(q), fbm(q + 17.3)) * 2.0 - 1.0);
 
 // 4. Sample both motifs. Keep a valid distance outside the cell.
 float sdf(vec2 p, float layer) {
@@ -303,39 +303,39 @@ float sdf(vec2 p, float layer) {
 // 5. Melt
 float t = uMorphT;
 if (uMeltMode == 2)
-  t = clamp(t * (1.0 + P(MELTNOISE)) - P(MELTNOISE) * fbm(p * P(MELTNOISESCALE)), 0.0, 1.0);
+  t = clamp(t * (1.0 + P_MELTNOISE) - P_MELTNOISE * fbm(p * P_MELTNOISESCALE), 0.0, 1.0);
 float d = mix(dA, dB, t);                           // modes 0 and 2
 if (uMeltMode == 1) {                               // fuse: A → smooth union → B
-  float dU = smin(dA, dB, P(MELTK));
+  float dU = smin(dA, dB, P_MELTK);
   d = t < 0.5 ? mix(dA, dU, smoothstep(0.0, 0.5, t)) : mix(dU, dB, smoothstep(0.5, 1.0, t));
 }
 // smin(a,b,k): float h = max(k - abs(a - b), 0.0) / k; return min(a, b) - h * h * k * 0.25;
 
 // 6. Line: thickness, spikes
-d -= P(THICKNESS);
-d -= P(SPIKEAMP) * pow(vnoise(p * P(SPIKEFREQ) + uSpikePhase), P(SPIKESHARP));
+d -= P_THICKNESS;
+d -= P_SPIKEAMP * pow(vnoise(p * P_SPIKEFREQ + uSpikePhase), P_SPIKESHARP);
 
 // 7. Mask (never call smoothstep with edge0 > edge1)
 float aa = clamp(fwidth(d), 1e-4, 0.02);
 float mask = 1.0 - smoothstep(-aa, aa, d);
 
 // 8. Inner waves, travelling along the depth of the line
-float wv = 0.5 + 0.5 * sin(TAU * (d * P(WAVEFREQ) - uWavePhase));
-float e  = mix(0.5, 0.01, P(WAVESHARP));
+float wv = 0.5 + 0.5 * sin(TAU * (d * P_WAVEFREQ - uWavePhase));
+float e  = mix(0.5, 0.01, P_WAVESHARP);
 wv = smoothstep(0.5 - e, 0.5 + e, wv);
-float inner = mix(1.0, wv, P(WAVEAMT));
+float inner = mix(1.0, wv, P_WAVEAMT);
 
 // 9. Outer glow, optionally rippled by the same waves
-float g = exp(-max(d, 0.0) / P(GLOWWIDTH)) * P(GLOW) * mix(1.0, wv, P(RIPPLE));
+float g = exp(-max(d, 0.0) / P_GLOWWIDTH) * P_GLOW * mix(1.0, wv, P_RIPPLE);
 
 // 10. Colour
-float h = P(HUE) + uHueOffset - clamp(d, -0.1, 0.02) * 10.0 * P(HUEDEPTH) + length(s) * 0.5 * P(HUESPACE);
-vec3 rgb = hsv2rgb(vec3(fract(h), P(SAT), 1.0));
+float h = P_HUE + uHueOffset - clamp(d, -0.1, 0.02) * 10.0 * P_HUEDEPTH + length(s) * 0.5 * P_HUESPACE;
+vec3 rgb = hsv2rgb(vec3(fract(h), P_SAT, 1.0));
 float lum = mask * inner + (1.0 - mask) * g;
-vec3 col = rgb * lum * P(BRIGHTNESS);
+vec3 col = rgb * lum * P_BRIGHTNESS;
 
 // 11. Grain (keeps the background black), master fade
-col += (hash(gl_FragCoord.xy + uFrame) - 0.5) * P(GRAIN) * (0.15 + lum);
+col += (hash(gl_FragCoord.xy + uFrame) - 0.5) * P_GRAIN * (0.15 + lum);
 fragColor = vec4(clamp(col, 0.0, 1.0) * uMaster, 1.0);
 ```
 

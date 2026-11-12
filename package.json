@@ -1,0 +1,19 @@
+{
+  "name": "ferro",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "check": "tsc --noEmit && vitest run",
+    "bake": "sh -c 'if ls art/png/*.png >/dev/null 2>&1; then D=art/png; else D=art/placeholders; fi; .venv/bin/python tools/bake_sdf.py \"$D\" public/sdf'"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  }
+}
