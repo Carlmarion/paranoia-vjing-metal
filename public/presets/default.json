@@ -1,0 +1,276 @@
+{
+ "version": 1,
+ "presets": [
+  {
+   "name": "Calm",
+   "savedAt": 0,
+   "look": {
+    "params": {
+     "linger": {
+      "base": 0.8
+     },
+     "warpAmt": {
+      "base": 0.02,
+      "react": 0.15
+     },
+     "waveAmt": {
+      "base": 0.3
+     },
+     "waveFreq": {
+      "base": 20
+     },
+     "waveSpeed": {
+      "base": 0.3
+     },
+     "glow": {
+      "base": 0.25
+     },
+     "glowWidth": {
+      "base": 0.18
+     },
+     "hue": {
+      "base": 0.6
+     },
+     "zoom": {
+      "base": 0.85,
+      "react": 0.03
+     },
+     "brightness": {
+      "base": 0.9,
+      "react": 0.05
+     }
+    },
+    "options": {
+     "meltMode": 1,
+     "holdBeats": 64,
+     "morphBeats": 32,
+     "hueJumpEvery": 0
+    }
+   }
+  },
+  {
+   "name": "Pulse",
+   "savedAt": 0,
+   "look": {
+    "params": {
+     "thickness": {
+      "base": 0.005,
+      "react": 0.5,
+      "band": "low",
+      "thr": 0.2
+     },
+     "zoom": {
+      "base": 0.85,
+      "react": 0.15,
+      "band": "low",
+      "thr": 0.1
+     },
+     "glow": {
+      "base": 0.4,
+      "react": 0.5,
+      "band": "beat",
+      "thr": 0
+     },
+     "brightness": {
+      "base": 1,
+      "react": 0.25
+     },
+     "hue": {
+      "base": 0.85
+     },
+     "waveAmt": {
+      "base": 0.2
+     }
+    },
+    "options": {
+     "meltMode": 1,
+     "holdBeats": 32,
+     "morphBeats": 8,
+     "hueJumpEvery": 16,
+     "hueJumpAmt": 0.15
+    }
+   }
+  },
+  {
+   "name": "Thorns",
+   "savedAt": 0,
+   "look": {
+    "params": {
+     "spikeAmp": {
+      "base": 0.02,
+      "react": 0.7,
+      "band": "high",
+      "thr": 0.25
+     },
+     "spikeFreq": {
+      "base": 40
+     },
+     "spikeSharp": {
+      "base": 6
+     },
+     "spikeSpeed": {
+      "base": 0.6
+     },
+     "hue": {
+      "base": 0.0
+     },
+     "hueDepth": {
+      "base": 0.6
+     },
+     "meltNoise": {
+      "base": 1.2
+     },
+     "glow": {
+      "base": 0.2
+     }
+    },
+    "options": {
+     "meltMode": 2,
+     "holdBeats": 32,
+     "morphBeats": 16
+    }
+   }
+  },
+  {
+   "name": "Moiré",
+   "savedAt": 0,
+   "look": {
+    "params": {
+     "waveFreq": {
+      "base": 260
+     },
+     "waveAmt": {
+      "base": 0.9
+     },
+     "waveSharp": {
+      "base": 0.7
+     },
+     "waveSpeed": {
+      "base": 1.5,
+      "react": 0.3,
+      "band": "energy",
+      "thr": 0
+     },
+     "ripple": {
+      "base": 0.6
+     },
+     "glow": {
+      "base": 0.35
+     },
+     "glowWidth": {
+      "base": 0.2
+     },
+     "sat": {
+      "base": 0.8
+     },
+     "thickness": {
+      "base": 0.015
+     },
+     "hue": {
+      "base": 0.3
+     }
+    },
+    "options": {
+     "meltMode": 0,
+     "holdBeats": 32,
+     "morphBeats": 16
+    }
+   }
+  },
+  {
+   "name": "Kaleido",
+   "savedAt": 0,
+   "look": {
+    "params": {
+     "mirrorShift": {
+      "base": 0.25
+     },
+     "rotation": {
+      "base": 0.08,
+      "react": 0.2,
+      "band": "mid",
+      "thr": 0.2
+     },
+     "zoom": {
+      "base": 0.7
+     },
+     "hueSpace": {
+      "base": 0.5
+     },
+     "meltK": {
+      "base": 0.15
+     },
+     "hue": {
+      "base": 0.12
+     }
+    },
+    "options": {
+     "meltMode": 1,
+     "mirrorX": true,
+     "mirrorY": true,
+     "holdBeats": 32,
+     "morphBeats": 16
+    }
+   }
+  },
+  {
+   "name": "Peak",
+   "savedAt": 0,
+   "look": {
+    "params": {
+     "warpAmt": {
+      "base": 0.04,
+      "react": 0.6,
+      "band": "mid",
+      "thr": 0.3
+     },
+     "thickness": {
+      "base": 0.005,
+      "react": 0.6,
+      "band": "low",
+      "thr": 0.15
+     },
+     "spikeAmp": {
+      "base": 0.01,
+      "react": 0.8,
+      "band": "high",
+      "thr": 0.3
+     },
+     "glow": {
+      "base": 0.5,
+      "react": 0.6,
+      "band": "low",
+      "thr": 0.2
+     },
+     "brightness": {
+      "base": 1,
+      "react": 0.3
+     },
+     "grain": {
+      "base": 0.08
+     },
+     "hue": {
+      "base": 0.95
+     }
+    },
+    "options": {
+     "meltMode": 1,
+     "holdBeats": 16,
+     "morphBeats": 4,
+     "hueJumpEvery": 4,
+     "hueJumpAmt": 0.33
+    }
+   }
+  },
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null
+ ]
+}
