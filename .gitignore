@@ -6,3 +6,5 @@ __pycache__/
 public/test-audio/*
 !public/test-audio/.gitkeep
 .DS_Store
+.gandalf-patterns.log
+.vitest/

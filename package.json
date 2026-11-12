@@ -9,10 +9,15 @@
     "preview": "vite preview",
     "test": "vitest run",
     "check": "tsc --noEmit && vitest run",
-    "bake": "sh -c 'if ls art/png/*.png >/dev/null 2>&1; then D=art/png; else D=art/placeholders; fi; .venv/bin/python tools/bake_sdf.py \"$D\" public/sdf'"
+    "bake": "sh -c 'if ls art/png/*.png >/dev/null 2>&1; then D=art/png; else D=art/placeholders; fi; .venv/bin/python tools/bake_sdf.py \"$D\" public/sdf'",
+    "lint": "eslint src tests",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "typescript": "^7.0.2",
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.14.0",
+    "typescript": "6.0",
+    "typescript-eslint": "^8.72.2",
     "vite": "^8.3.8",
     "vitest": "^5.1.0"
   }

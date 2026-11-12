@@ -262,7 +262,7 @@ Units: motif space, the cell is −1…+1. A typical stroke half-width is 0.02�
 `waveFreq` is in cycles per motif unit. At 1080p the Nyquist limit is about 230, so values above that alias on purpose: this is the moiré effect.
 
 ### B4.3 Phases
-A speed param that changes over time must not be multiplied by time (it jumps). `modulation.ts` integrates three phases each frame and uploads them: `uWarpPhase += warpSpeed × dt`, `uSpikePhase += spikeSpeed × dt`, `uWavePhase += waveSpeed × dt`. Wrap each at 1000.
+A speed param that changes over time must not be multiplied by time (it jumps). `modulation.ts` integrates three phases each frame and uploads them: `uWarpPhase += warpSpeed × dt`, `uSpikePhase += spikeSpeed × dt`, `uWavePhase += waveSpeed × dt`. `uWavePhase` wraps at 1000 (it feeds a sine, so the wrap is invisible). The warp and spike phases are noise coordinates and are never wrapped: a wrap would make the shape jump. The shader's `hash` is an integer hash of the cell index, exact up to 2^24 cells, so noise stays clean for days of running.
 
 ## B5. Shader (`shader.frag`, `#version 300 es`)
 
@@ -340,7 +340,7 @@ fragColor = vec4(clamp(col, 0.0, 1.0) * uMaster, 1.0);
 ```
 
 Notes:
-- Noise is hash-based, no textures. `vnoise` and `fbm` return 0…1.
+- Noise is hash-based, no textures: an integer (`uint`) hash of `floor(p)`. `vnoise` and `fbm` return 0…1.
 - Draw one fullscreen triangle. Canvas size = CSS size × `min(devicePixelRatio, 1)` × `?scale=` (default 1).
 - On shader compile or link failure: keep the previous program, show the error in the debug overlay, and send it to the Control window. Never show a blank screen.
 - `uMaster` fades 1 → 0 over 1 s on blackout, and back.
