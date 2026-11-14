@@ -1,0 +1,143 @@
+{
+  "version": 1,
+  "count": 12,
+  "cell": 512,
+  "dtype": "float16",
+  "origin": "top-left",
+  "motifs": [
+    {
+      "id": 0,
+      "file": "01.png",
+      "coverage": 0.0865,
+      "centroid": [
+        0.4999,
+        0.4999
+      ],
+      "warnings": [
+        "coverage 0.086 outside 0.10-0.25",
+        "coverage 0.086 more than 25% from the set median 0.171"
+      ]
+    },
+    {
+      "id": 1,
+      "file": "02.png",
+      "coverage": 0.1473,
+      "centroid": [
+        0.4999,
+        0.4999
+      ],
+      "warnings": []
+    },
+    {
+      "id": 2,
+      "file": "03.png",
+      "coverage": 0.2051,
+      "centroid": [
+        0.4999,
+        0.4999
+      ],
+      "warnings": []
+    },
+    {
+      "id": 3,
+      "file": "04.png",
+      "coverage": 0.1301,
+      "centroid": [
+        0.4999,
+        0.4999
+      ],
+      "warnings": []
+    },
+    {
+      "id": 4,
+      "file": "05.png",
+      "coverage": 0.2134,
+      "centroid": [
+        0.4998,
+        0.4998
+      ],
+      "warnings": []
+    },
+    {
+      "id": 5,
+      "file": "06.png",
+      "coverage": 0.2894,
+      "centroid": [
+        0.4998,
+        0.4998
+      ],
+      "warnings": [
+        "coverage 0.289 outside 0.10-0.25",
+        "coverage 0.289 more than 25% from the set median 0.171"
+      ]
+    },
+    {
+      "id": 6,
+      "file": "07.png",
+      "coverage": 0.0876,
+      "centroid": [
+        0.4999,
+        0.5
+      ],
+      "warnings": [
+        "coverage 0.088 outside 0.10-0.25",
+        "coverage 0.088 more than 25% from the set median 0.171"
+      ]
+    },
+    {
+      "id": 7,
+      "file": "08.png",
+      "coverage": 0.1452,
+      "centroid": [
+        0.4999,
+        0.5
+      ],
+      "warnings": []
+    },
+    {
+      "id": 8,
+      "file": "09.png",
+      "coverage": 0.195,
+      "centroid": [
+        0.4999,
+        0.4999
+      ],
+      "warnings": []
+    },
+    {
+      "id": 9,
+      "file": "10.png",
+      "coverage": 0.1142,
+      "centroid": [
+        0.4998,
+        0.4998
+      ],
+      "warnings": [
+        "coverage 0.114 more than 25% from the set median 0.171"
+      ]
+    },
+    {
+      "id": 10,
+      "file": "11.png",
+      "coverage": 0.1954,
+      "centroid": [
+        0.4998,
+        0.4998
+      ],
+      "warnings": []
+    },
+    {
+      "id": 11,
+      "file": "12.png",
+      "coverage": 0.2681,
+      "centroid": [
+        0.4998,
+        0.4998
+      ],
+      "warnings": [
+        "coverage 0.268 outside 0.10-0.25",
+        "coverage 0.268 more than 25% from the set median 0.171"
+      ]
+    }
+  ]
+}
