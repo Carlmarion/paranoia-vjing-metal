@@ -159,7 +159,7 @@ interface Look {
     mirrorX: boolean; mirrorY: boolean;
     hueJumpEvery: 0 | 1 | 2 | 4 | 8 | 16;   // beats; 0 = off
     hueJumpAmt: number;           // 0…0.5 turns
-    holdBeats: 16 | 32 | 64 | 128;
+    holdBeats: 0 | 16 | 32 | 64 | 128;  // 0 = flow: always melting
     morphBeats: 4 | 8 | 16 | 32 | 64;
   };
 }
@@ -390,7 +390,7 @@ At the default 340 ms refractory, beats are capped at 2.9 per second.
 Everything counts in beats. A real onset is one beat. When `silent`, or no onset for 3 s, a virtual clock ticks one beat every 0.5 s. So the piece keeps moving in silence.
 
 ### B7.2 States
-- **HOLD(A):** `remaining = holdBeats`, minus 1 per beat. At 0 (if `autoAdvance` and not `frozen` and not `meltHold`) → MORPH.
+- **HOLD(A):** `remaining = holdBeats`, minus 1 per beat. At 0 (if `autoAdvance` and not `frozen` and not `meltHold`) → MORPH. With `holdBeats` 0 (flow) the next morph starts on the frame after landing, so the motifs melt continuously; each motif is reached for an instant, where the eased curve slows to zero speed.
 - **MORPH(A → B):** `progress += dt / (morphBeats × beatPeriod)`, with `beatPeriod` sampled when the morph starts. At 1 → A = B, HOLD.
 - Target choice: `queued` if set; else `random` (seeded, never one of the last 3 shown; relax to "not the current" when count ≤ 4) or `sequential`.
 - Eased value sent to the shader:
@@ -518,7 +518,7 @@ Dark, low-luminance UI (the laptop must not light the room): background `#0b0b0d
 
 - **dsp:** envelope converges to within 5% at 30 fps and 144 fps; auto-gain output stays in 0…1 for input scaled ×0.01 and ×100; a synthetic 126 BPM kick train yields 126 ± 3 onsets per minute; a synthetic 190 BPM kick train never yields more than 3 onsets in any 1 s window; intervals of 0.25 s, 0.5 s and 1.0 s all fold to 0.5 s; white noise yields < 10 onsets per minute; silence sets `silent` after 3 s and keeps all bands at 0.
 - **modulation:** `thr` gates correctly (band below thr → no change; band = 1 → full `react`); log and wrap scales; `lock` removes drift; output always inside min…max.
-- **sequencer:** same seed + same beat stream → same motif sequence; no motif repeats within 3 transitions (count ≥ 5); in silence a morph still starts after `holdBeats × 0.5 s`; `uMorphT` is continuous: at 60 fps no frame changes it by more than 0.05, including when a command arrives during a morph and when melt hold is entered or left at any position; the eased curve has `uMorphT = 0.5` at `p = 0.5` for every `linger`, zero speed at `p = 0` and `p = 1`, and is strictly increasing; inverting it returns `p` within 1e-4.
+- **sequencer:** same seed + same beat stream → same motif sequence; no motif repeats within 3 transitions (count ≥ 5); in silence a morph still starts after `holdBeats × 0.5 s`; with `holdBeats` 0, HOLD lasts at most 1 frame; `uMorphT` is continuous: at 60 fps no frame changes it by more than 0.05, including when a command arrives during a morph and when melt hold is entered or left at any position; the eased curve has `uMorphT = 0.5` at `p = 0.5` for every `linger`, zero speed at `p = 0` and `p = 1`, and is strictly increasing; inverting it returns `p` within 1e-4.
 - **presets:** save → export → import round-trip is identical; randomize and mutate never change locked params and never leave rand or min…max ranges; crossfade endpoints are exact; undo restores the previous Look; hue interpolates the short way.
 - **store:** every message type; unknown messages are ignored; a corrupt `localStorage` value falls back to defaults.
 

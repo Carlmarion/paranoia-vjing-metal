@@ -150,7 +150,7 @@ const autoRow = row('advance', left);
 const autoBtn = toggleBtn('auto', () => toggleSession('autoAdvance'), autoRow);
 const orderSeg = new Seg<Order>(ORDERS, ['random', 'seq'], (v) => setSession('order', v), autoRow);
 
-const holdSeg = new Seg<HoldBeats>(HOLD_BEATS, HOLD_BEATS.map(String), (v) => send({ t: 'setOption', key: 'holdBeats', value: v }), row('hold beats', left));
+const holdSeg = new Seg<HoldBeats>(HOLD_BEATS, HOLD_BEATS.map((v) => (v === 0 ? 'flow' : String(v))), (v) => send({ t: 'setOption', key: 'holdBeats', value: v }), row('hold beats', left));
 const morphSeg = new Seg<MorphBeats>(MORPH_BEATS, MORPH_BEATS.map(String), (v) => send({ t: 'setOption', key: 'morphBeats', value: v }), row('morph beats', left));
 const meltSeg = new Seg<MeltMode>(MELT_MODES, ['blend', 'fuse', 'spatial'], (v) => send({ t: 'setOption', key: 'meltMode', value: v }), row('melt', left));
 
