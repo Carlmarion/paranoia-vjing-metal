@@ -8,7 +8,7 @@ export interface ParamState { base: number; react: number; band: Band; thr: numb
 
 export type MeltMode = 0 | 1 | 2;
 export type HueJumpEvery = 0 | 1 | 2 | 4 | 8 | 16;
-export type HoldBeats = 16 | 32 | 64 | 128;
+export type HoldBeats = 0 | 16 | 32 | 64 | 128;
 export type MorphBeats = 4 | 8 | 16 | 32 | 64;
 
 export interface LookOptions {
@@ -71,7 +71,7 @@ export interface State {
 export const BANDS: Band[] = ['none', 'low', 'mid', 'high', 'energy', 'beat'];
 export const MELT_MODES: MeltMode[] = [0, 1, 2];
 export const HUE_JUMP_EVERY: HueJumpEvery[] = [0, 1, 2, 4, 8, 16];
-export const HOLD_BEATS: HoldBeats[] = [16, 32, 64, 128];
+export const HOLD_BEATS: HoldBeats[] = [0, 16, 32, 64, 128];
 export const MORPH_BEATS: MorphBeats[] = [4, 8, 16, 32, 64];
 export const ORDERS: Order[] = ['random', 'sequential'];
 export const PRESET_CYCLE_MIN: PresetCycleMin[] = [0, 2, 5, 10];

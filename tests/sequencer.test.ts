@@ -161,6 +161,18 @@ describe('beats and timing', () => {
     }
   });
 
+  test('holdBeats 0 (flow): the next morph starts right after each landing', () => {
+    const s = new Sim(3, 12, { holdBeats: 0, morphBeats: 4 }); // 2 s morphs in silence
+    s.run(20);
+    let run = 0;
+    for (const o of s.outs) {
+      run = o.phase === 'hold' ? run + 1 : 0;
+      expect(run).toBeLessThanOrEqual(1);
+    }
+    expect(s.shown().length).toBeGreaterThanOrEqual(10);
+    expectContinuous(s.outs);
+  });
+
   test('no onset for 3 s starts the virtual clock even when not silent', () => {
     const s = new Sim(3);
     s.run(10, () => beatFrame(false));
