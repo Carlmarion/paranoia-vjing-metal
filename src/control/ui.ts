@@ -34,14 +34,17 @@ export interface SliderOpts {
   onReset(): void;
   /** wheel step in 0…1 units (default 0.01) */
   step?: number;
-  /** 0…1 position of a centre detent (snaps within ±0.025 while dragging) */
-  detent?: number;
+  /** 0…1 positions of marked detents (drawn on the track; dragging snaps to them within ±0.025) */
+  detents?: readonly number[];
+  /** 0…1 position the fill grows from (bipolar sliders); default 0 */
+  origin?: number;
   tick?: boolean;
   bar?: boolean;
   cls?: string;
 }
 
 const RELEASE_HOLD_MS = 400;
+const SNAP = 0.025;
 
 /**
  * Pointer slider working in 0…1. `set()` (from a state message) is ignored while the slider is
@@ -64,7 +67,7 @@ export class Slider {
     const el = h('div', `slider ${o.cls ?? ''}`.trim());
     this.el = el;
     const track = h('div', 'sl-track', undefined, el);
-    if (o.detent !== undefined) h('div', 'sl-detent', undefined, track).style.left = `${o.detent * 100}%`;
+    for (const d of o.detents ?? []) h('div', 'sl-detent', undefined, track).style.left = `${d * 100}%`;
     this.fill = h('div', 'sl-fill', undefined, track);
     this.tickEl = o.tick ? h('div', 'sl-tick', undefined, track) : null;
     this.thumb = h('div', 'sl-thumb', undefined, track);
@@ -128,8 +131,10 @@ export class Slider {
 
   private input(u: number, snap: boolean): void {
     let v = clamp01(u);
-    const d = this.o.detent;
-    if (snap && d !== undefined && Math.abs(v - d) < 0.025) v = d;
+    if (snap) {
+      const near = (this.o.detents ?? []).find((d) => Math.abs(v - d) < SNAP);
+      if (near !== undefined) v = near;
+    }
     this.render(v);
     this.o.onInput(v);
   }
@@ -141,14 +146,9 @@ export class Slider {
 
   private render(u: number): void {
     this.u = u;
-    const d = this.o.detent;
-    if (d !== undefined) {
-      const lo = Math.min(u, d);
-      this.fill.style.left = `${lo * 100}%`;
-      this.fill.style.width = `${Math.abs(u - d) * 100}%`;
-    } else {
-      this.fill.style.width = `${u * 100}%`;
-    }
+    const o = this.o.origin ?? 0;
+    this.fill.style.left = `${Math.min(u, o) * 100}%`;
+    this.fill.style.width = `${Math.abs(u - o) * 100}%`;
     this.thumb.style.left = `${u * 100}%`;
   }
 }
