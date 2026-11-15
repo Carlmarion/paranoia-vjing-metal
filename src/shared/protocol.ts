@@ -59,7 +59,7 @@ export interface StateMsg { t: 'state'; state: State; manifest: Manifest | null;
 export interface MetersMsg {
   t: 'meters';
   audio: AudioFrame;
-  values: number[]; // 30 effective param values, normalised 0…1
+  values: number[]; // PARAM_COUNT effective param values, normalised 0…1
   motifA: number; motifB: number; morphT: number; holdRemaining: number; fps: number;
   error?: string;
 }

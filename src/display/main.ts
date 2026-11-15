@@ -230,7 +230,7 @@ function frame(nowMs: number): void {
       params: mod.values, res: [canvas.width, canvas.height],
       motifA, motifB, morphT,
       meltMode: look.options.meltMode, mirrorX: look.options.mirrorX, mirrorY: look.options.mirrorY,
-      warpPhase: mod.warpPhase, spikePhase: mod.spikePhase, wavePhase: mod.wavePhase,
+      warpPhase: mod.warpPhase, spikePhase: mod.spikePhase, wavePhase: mod.wavePhase, spinPhase: mod.spinPhase,
       hueOffset: fb ? 0 : ap.hueOffset, master, frame: frameNo++,
     });
   }

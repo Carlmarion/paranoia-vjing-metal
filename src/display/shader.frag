@@ -10,7 +10,7 @@ uniform vec2  uRes;
 uniform float uMotifA, uMotifB, uMorphT;
 uniform int   uMeltMode;
 uniform bool  uMirrorX, uMirrorY;
-uniform float uWarpPhase, uSpikePhase, uWavePhase, uHueOffset, uMaster, uFrame;
+uniform float uWarpPhase, uSpikePhase, uWavePhase, uSpinPhase, uHueOffset, uMaster, uFrame;
 
 out vec4 fragColor;
 
@@ -53,11 +53,11 @@ void main() {
   vec2 s = (gl_FragCoord.xy - 0.5 * uRes) / (0.5 * min(uRes.x, uRes.y));
   vec2 p = s;
 
-  // ---------- 2. Tilt, mirror, rotate, zoom ----------
+  // ---------- 2. Tilt, mirror, rotate (+ spin), zoom ----------
   p /= max(1.0 + P_TILTX * p.x + P_TILTY * p.y, 0.25);
   if (uMirrorX) p.x = abs(p.x) - P_MIRRORSHIFT;
   if (uMirrorY) p.y = abs(p.y) - P_MIRRORSHIFT;
-  p = rot(P_ROTATION * TAU) * p / P_ZOOM;
+  p = rot((P_ROTATION + uSpinPhase) * TAU) * p / P_ZOOM;
 
   // ---------- 3. Warp ----------
   vec2 q = p * P_WARPSCALE + uWarpPhase;

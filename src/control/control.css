@@ -60,7 +60,7 @@ input[type=checkbox] { accent-color: var(--accent); width: 14px; height: 14px; m
 .sl-thumb { position: absolute; top: -5px; width: 3px; height: 14px; margin-left: -1px; background: #b4b4bc; border-radius: 1px; }
 .slider.active .sl-thumb, .slider:hover .sl-thumb { background: #e2e2e8; }
 .sl-tick { position: absolute; top: -3px; width: 2px; height: 10px; margin-left: -1px; background: var(--accent); }
-.sl-detent { position: absolute; top: -3px; bottom: -3px; width: 1px; background: #3a3a42; }
+.sl-detent { position: absolute; top: -4px; bottom: -4px; width: 1px; background: #6a6a76; }
 .sl-barwrap { position: absolute; left: 0; right: 0; bottom: 4px; height: 2px; background: #141418; }
 .sl-bar { height: 100%; background: var(--accent); opacity: .7; transform: scaleX(0); transform-origin: left; }
 .scrub .slider .sl-track { height: 10px; }

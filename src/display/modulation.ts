@@ -29,7 +29,7 @@ export function modulateNorm(
 }
 
 export interface Modulation {
-  /** Effective values on each param's own scale → `uniform float uP[30]`. */
+  /** Effective values on each param's own scale → `uniform float uP[PARAM_COUNT]`. */
   values: Float32Array;
   /** Same, normalised 0…1 → `meters.values`. */
   norm: Float32Array;
@@ -37,10 +37,12 @@ export interface Modulation {
   warpPhase: number;
   spikePhase: number;
   wavePhase: number;
+  /** Turns, 0…1: spins at `spin` turns/min while the spin option is on, glides back to upright when off. */
+  spinPhase: number;
 }
 
 export function createModulation(): Modulation {
-  return { values: new Float32Array(PARAM_COUNT), norm: new Float32Array(PARAM_COUNT), warpPhase: 0, spikePhase: 0, wavePhase: 0 };
+  return { values: new Float32Array(PARAM_COUNT), norm: new Float32Array(PARAM_COUNT), warpPhase: 0, spikePhase: 0, wavePhase: 0, spinPhase: 0 };
 }
 
 function wrapPhase(x: number): number {
@@ -50,6 +52,9 @@ function wrapPhase(x: number): number {
 const I_WARP_SPEED = PARAM_INDEX.warpSpeed;
 const I_SPIKE_SPEED = PARAM_INDEX.spikeSpeed;
 const I_WAVE_SPEED = PARAM_INDEX.waveSpeed;
+const I_SPIN = PARAM_INDEX.spin;
+/** Time constant (s) of the glide back to upright when spin is turned off. */
+export const SPIN_RETURN_TAU = 0.4;
 
 /**
  * Per frame: fills m.values / m.norm and integrates the three phases.
@@ -70,4 +75,14 @@ export function modulate(m: Modulation, look: Look, session: Session, frame: Aud
   m.warpPhase += m.values[I_WARP_SPEED] * dt;
   m.spikePhase += m.values[I_SPIKE_SPEED] * dt;
   m.wavePhase = wrapPhase(m.wavePhase + m.values[I_WAVE_SPEED] * dt);
+  m.spinPhase = look.options.spin
+    ? fract(m.spinPhase + (m.values[I_SPIN] / 60) * dt)
+    : glideUpright(m.spinPhase, dt);
+}
+
+/** Ease a 0…1 turn phase toward the nearest whole turn (shortest way); snaps to exactly 0 when close. */
+function glideUpright(phase: number, dt: number): number {
+  const target = Math.round(phase); // 0 or 1
+  const next = phase + (target - phase) * (1 - Math.exp(-dt / SPIN_RETURN_TAU));
+  return Math.abs(target - next) < 1e-4 ? 0 : fract(next);
 }

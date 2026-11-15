@@ -140,3 +140,43 @@ describe('phases (B4.3)', () => {
     expect(m.wavePhase).toBeGreaterThan(999);
   });
 });
+
+describe('spin (B4.3)', () => {
+  const spinLook = (on: boolean, rpm: number): Look => {
+    const look = defaultLook();
+    look.options.spin = on;
+    look.params.spin = { base: rpm, react: 0, band: 'none', thr: 0, lock: false };
+    return look;
+  };
+  /** Shortest distance between two phases on the 0…1 circle. */
+  const circ = (a: number, b: number): number => { const d = Math.abs(a - b) % 1; return Math.min(d, 1 - d); };
+
+  test('on: advances by spin / 60 turns per second, stays in 0…1', () => {
+    const m = createModulation();
+    for (let i = 0; i < 60 * 45; i++) modulate(m, spinLook(true, 2), noDrift(), frame(), 0, 1 / 60);
+    expect(circ(m.spinPhase, 0.5)).toBeLessThan(1e-6); // 45 s at 2 turns/min = 1.5 turns
+    expect(m.spinPhase).toBeGreaterThanOrEqual(0);
+    expect(m.spinPhase).toBeLessThan(1);
+  });
+
+  test('negative speed spins the other way', () => {
+    const m = createModulation();
+    for (let i = 0; i < 60 * 15; i++) modulate(m, spinLook(true, -1), noDrift(), frame(), 0, 1 / 60);
+    expect(circ(m.spinPhase, 0.75)).toBeLessThan(1e-6);
+  });
+
+  test('off: glides back to upright by the shortest way, without jumps', () => {
+    for (const start of [0.3, 0.8]) {
+      const m = createModulation();
+      m.spinPhase = start;
+      let prev = start;
+      for (let i = 0; i < 60 * 4; i++) {
+        modulate(m, spinLook(false, 2), noDrift(), frame(), 0, 1 / 60);
+        expect(circ(m.spinPhase, prev)).toBeLessThanOrEqual(0.05);
+        expect(circ(m.spinPhase, 0)).toBeLessThanOrEqual(circ(prev, 0) + 1e-12);
+        prev = m.spinPhase;
+      }
+      expect(m.spinPhase).toBe(0);
+    }
+  });
+});

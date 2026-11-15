@@ -154,9 +154,14 @@ const holdSeg = new Seg<HoldBeats>(HOLD_BEATS, HOLD_BEATS.map((v) => (v === 0 ? 
 const morphSeg = new Seg<MorphBeats>(MORPH_BEATS, MORPH_BEATS.map(String), (v) => send({ t: 'setOption', key: 'morphBeats', value: v }), row('morph beats', left));
 const meltSeg = new Seg<MeltMode>(MELT_MODES, ['blend', 'fuse', 'spatial'], (v) => send({ t: 'setOption', key: 'meltMode', value: v }), row('melt', left));
 
+type BoolOption = 'mirrorX' | 'mirrorY' | 'spin';
+const toggleOption = (key: BoolOption): void => {
+  if (last) send({ t: 'setOption', key, value: !last.state.look.options[key] });
+};
 const mirrorRow = row('mirror', left);
-const mirrorXBtn = toggleBtn('X', () => { if (last) send({ t: 'setOption', key: 'mirrorX', value: !last.state.look.options.mirrorX }); }, mirrorRow);
-const mirrorYBtn = toggleBtn('Y', () => { if (last) send({ t: 'setOption', key: 'mirrorY', value: !last.state.look.options.mirrorY }); }, mirrorRow);
+const mirrorXBtn = toggleBtn('X', () => toggleOption('mirrorX'), mirrorRow);
+const mirrorYBtn = toggleBtn('Y', () => toggleOption('mirrorY'), mirrorRow);
+const spinBtn = toggleBtn('spin', () => toggleOption('spin'), row('rotate', left));
 
 const hueEverySeg = new Seg<HueJumpEvery>(HUE_JUMP_EVERY, HUE_JUMP_EVERY.map((v) => (v === 0 ? 'off' : String(v))),
   (v) => send({ t: 'setOption', key: 'hueJumpEvery', value: v }), row('hue jump', left));
@@ -176,6 +181,19 @@ const thrMap = lin(...THR_RANGE);
 const paramRows: ParamRow[] = [];
 const rowBands: Band[] = PARAMS.map((p) => p.band);
 
+/** Rotation is marked every 45°. */
+const ROTATION_MARK_TURNS = 0.125;
+
+/** Marked positions on a base slider: every 45° for rotation, else 0 when the range spans it. */
+function baseDetents(def: ParamDef): number[] {
+  if (def.id === 'rotation') {
+    const marks: number[] = [];
+    for (let t = Math.ceil(def.min / ROTATION_MARK_TURNS); t * ROTATION_MARK_TURNS <= def.max; t++) marks.push(toNorm(def, t * ROTATION_MARK_TURNS));
+    return marks;
+  }
+  return def.min < 0 && def.max > 0 ? [toNorm(def, 0)] : [];
+}
+
 function paramRow(def: ParamDef, parent: HTMLElement): ParamRow {
   const r = h('div', 'prow', undefined, parent);
   h('span', 'lbl', def.id, r);
@@ -183,11 +201,14 @@ function paramRow(def: ParamDef, parent: HTMLElement): ParamRow {
   const k = (f: string): string => `p:${id}:${f}`;
   const base = new Slider({
     tick: true,
+    detents: baseDetents(def),
+    origin: def.min < 0 && def.max > 0 ? toNorm(def, 0) : 0,
     onInput: (u) => queueSend(k('base'), { t: 'setParam', id, field: 'base', value: fromNorm(def, u) }),
     onReset: () => queueSend(k('base'), { t: 'setParam', id, field: 'base', value: def.def }),
   });
   const react = new Slider({
-    detent: reactMap.toU(0),
+    detents: [reactMap.toU(0)],
+    origin: reactMap.toU(0),
     onInput: (u) => queueSend(k('react'), { t: 'setParam', id, field: 'react', value: reactMap.fromU(u) }),
     onReset: () => queueSend(k('react'), { t: 'setParam', id, field: 'react', value: def.react }),
   });
@@ -381,6 +402,7 @@ function applyState(msg: StateMsg): void {
   hueAmt.set(o.hueJumpAmt);
   setOn(mirrorXBtn, o.mirrorX);
   setOn(mirrorYBtn, o.mirrorY);
+  setOn(spinBtn, o.spin);
 
   setOn(freezeBtn, session.frozen);
   setOn(fallbackBtn, session.fallback);

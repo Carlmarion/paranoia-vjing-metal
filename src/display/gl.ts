@@ -16,6 +16,7 @@ export interface FrameUniforms {
   warpPhase: number;
   spikePhase: number;
   wavePhase: number;
+  spinPhase: number;
   hueOffset: number;
   master: number;
   frame: number;
@@ -23,7 +24,7 @@ export interface FrameUniforms {
 
 const UNIFORMS = [
   'uSdf', 'uP', 'uRes', 'uMotifA', 'uMotifB', 'uMorphT', 'uMeltMode', 'uMirrorX', 'uMirrorY',
-  'uWarpPhase', 'uSpikePhase', 'uWavePhase', 'uHueOffset', 'uMaster', 'uFrame',
+  'uWarpPhase', 'uSpikePhase', 'uWavePhase', 'uSpinPhase', 'uHueOffset', 'uMaster', 'uFrame',
 ] as const;
 type UniformName = (typeof UNIFORMS)[number];
 
@@ -132,6 +133,7 @@ export class Renderer {
     gl.uniform1f(L.uWarpPhase, u.warpPhase);
     gl.uniform1f(L.uSpikePhase, u.spikePhase);
     gl.uniform1f(L.uWavePhase, u.wavePhase);
+    gl.uniform1f(L.uSpinPhase, u.spinPhase);
     gl.uniform1f(L.uHueOffset, u.hueOffset);
     gl.uniform1f(L.uMaster, u.master);
     gl.uniform1f(L.uFrame, u.frame % 997);
