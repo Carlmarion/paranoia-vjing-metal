@@ -161,7 +161,6 @@ interface Look {
     hueJumpAmt: number;           // 0…0.5 turns
     holdBeats: 0 | 16 | 32 | 64 | 128;  // 0 = flow: always melting
     morphBeats: 4 | 8 | 16 | 32 | 64;
-    spin: boolean;                // continuous rotation at the `spin` param's speed
   };
 }
 
@@ -229,7 +228,7 @@ Units: motif space, the cell is −1…+1. A typical stroke half-width is 0.02�
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | zoom | shape | lin | 0.5 | 1.4 | 0.85 | low | 0.06 | 0.15 | 0.04 | 120 | 0.7–1.0 |
 | rotation | shape | lin | −0.25 | 0.25 | 0 | none | 0 | 0 | 0.15 | 240 | −0.1–0.1 |
-| spin | shape | lin | −6 | 6 | 1 | none | 0 | 0 | 0 | — | −2–2 |
+| spin | shape | lin | −6 | 6 | 0 | none | 0 | 0 | 0 | — | −2–2 |
 | tiltX | shape | lin | −0.4 | 0.4 | 0 | none | 0 | 0 | 0.2 | 90 | −0.2–0.2 |
 | tiltY | shape | lin | −0.4 | 0.4 | 0 | none | 0 | 0 | 0.2 | 110 | −0.2–0.2 |
 | mirrorShift | shape | lin | 0 | 0.6 | 0 | none | 0 | 0 | 0.1 | 150 | 0–0.4 |
@@ -264,7 +263,7 @@ Units: motif space, the cell is −1…+1. A typical stroke half-width is 0.02�
 `waveFreq` is in cycles per motif unit. At 1080p the Nyquist limit is about 230, so values above that alias on purpose: this is the moiré effect.
 
 ### B4.3 Phases
-A speed param that changes over time must not be multiplied by time (it jumps). `modulation.ts` integrates four phases each frame and uploads them: `uWarpPhase += warpSpeed × dt`, `uSpikePhase += spikeSpeed × dt`, `uWavePhase += waveSpeed × dt`. `uWavePhase` wraps at 1000 (it feeds a sine, so the wrap is invisible). The warp and spike phases are noise coordinates and are never wrapped: a wrap would make the shape jump. The shader's `hash` is an integer hash of the cell index, exact up to 2^24 cells, so noise stays clean for days of running. `uSpinPhase` is in turns, kept in 0…1: while the `spin` option is on it advances by `spin / 60 × dt` (`spin` is in turns per minute, so band and react make it surge on the music); while off it glides back to the nearest whole turn with a time constant of 0.4 s and snaps to exactly 0 within 1e-4, so the motif returns upright without a jump.
+A speed param that changes over time must not be multiplied by time (it jumps). `modulation.ts` integrates four phases each frame and uploads them: `uWarpPhase += warpSpeed × dt`, `uSpikePhase += spikeSpeed × dt`, `uWavePhase += waveSpeed × dt`. `uWavePhase` wraps at 1000 (it feeds a sine, so the wrap is invisible). The warp and spike phases are noise coordinates and are never wrapped: a wrap would make the shape jump. The shader's `hash` is an integer hash of the cell index, exact up to 2^24 cells, so noise stays clean for days of running. `uSpinPhase` is in turns, kept in 0…1. It advances by `spin / 60 × dt`, where `spin` is the effective value in turns per minute: band and react make the motif turn with the music, and with `base` 0 it stays where the sound left it. While spin is fully off (`base` 0 and `react` 0) it glides back to the nearest whole turn with a time constant of 0.4 s and snaps to exactly 0 within 1e-4, so the motif returns upright without a jump.
 
 ## B5. Shader (`shader.frag`, `#version 300 es`)
 
@@ -422,8 +421,8 @@ Both curves have zero speed at p = 0 and p = 1, so a morph starts and lands with
 
 - **16 slots.** `save(slot?)` writes the current Look to the given slot, or the first empty one, named `HH:MM:SS`. `rename`, `delete`.
 - **Recall** crossfades over `session.xfade` seconds: `base`, `react` and `thr` interpolate in normalised space (hue takes the shortest way round); `band`, `lock` and all `options` switch at the start.
-- **Default Look options:** `meltMode` 1 (fuse), `mirrorX` false, `mirrorY` false, `hueJumpEvery` 0, `hueJumpAmt` 0.25, `holdBeats` 32, `morphBeats` 16, `spin` false.
-- **Randomize(group?)** for every unlocked param (optionally only one group): `base` uniform in the rand range (log-uniform for log params); `react` uniform in 0…0.6, sign positive; `band` = table default with probability 0.5, else uniform among low, mid, high, beat, energy; `thr` uniform in 0…0.5. Options: `meltMode` uniform; `mirrorX`, `mirrorY` true with probability 0.25 each. Never touches `brightness`, `holdBeats`, `morphBeats`, `hueJumpEvery`, `spin`.
+- **Default Look options:** `meltMode` 1 (fuse), `mirrorX` false, `mirrorY` false, `hueJumpEvery` 0, `hueJumpAmt` 0.25, `holdBeats` 32, `morphBeats` 16.
+- **Randomize(group?)** for every unlocked param (optionally only one group): `base` uniform in the rand range (log-uniform for log params); `react` uniform in 0…0.6, sign positive; `band` = table default with probability 0.5, else uniform among low, mid, high, beat, energy; `thr` uniform in 0…0.5. Options: `meltMode` uniform; `mirrorX`, `mirrorY` true with probability 0.25 each. Never touches `brightness`, `holdBeats`, `morphBeats`, `hueJumpEvery`.
 - **Mutate:** for every unlocked param, `base_norm += N(0, 0.08)`, `react += N(0, 0.1)`, `thr += N(0, 0.05)`, all clamped. Options unchanged. This is the tool for walking around a sweet spot.
 - **Reset(group?)**: back to table defaults.
 - **Undo:** ring of 30 Looks, pushed before randomize, mutate, reset and recall. Undo crossfades over 1 s.
@@ -459,7 +458,8 @@ Dark, low-luminance UI (the laptop must not light the room): background `#0b0b0d
 - Click = queue. Double-click = go now. Buttons Prev, Next, Random.
 - Morph progress bar and beats remaining in the hold.
 - `autoAdvance` toggle, `order`, `holdBeats`, `morphBeats`.
-- Melt mode (3 buttons), mirror X, mirror Y, spin, hue jump every, hue jump amount.
+- Melt mode (3 buttons), mirror X, mirror Y, hue jump every, hue jump amount.
+- Spin button: sets the `spin` base to 1 turn/min when it is 0, else to 0; lit while the base is not 0.
 - Melt hold toggle with a wide scrub slider (`holdPos`).
 
 **Centre: one panel per group** (shape, melt, line, inner, colour). Header has Randomize, Mutate and Reset for that group. One row per param:
@@ -520,7 +520,7 @@ Dark, low-luminance UI (the laptop must not light the room): background `#0b0b0d
 ## C2. Required unit tests
 
 - **dsp:** envelope converges to within 5% at 30 fps and 144 fps; auto-gain output stays in 0…1 for input scaled ×0.01 and ×100; a synthetic 126 BPM kick train yields 126 ± 3 onsets per minute; a synthetic 190 BPM kick train never yields more than 3 onsets in any 1 s window; intervals of 0.25 s, 0.5 s and 1.0 s all fold to 0.5 s; white noise yields < 10 onsets per minute; silence sets `silent` after 3 s and keeps all bands at 0.
-- **modulation:** `thr` gates correctly (band below thr → no change; band = 1 → full `react`); log and wrap scales; `lock` removes drift; output always inside min…max. Spin: on, the phase advances by `spin / 60` turns per second and stays in 0…1; off, it returns to exactly 0 by the shortest way with no frame moving it more than 0.05 turn.
+- **modulation:** `thr` gates correctly (band below thr → no change; band = 1 → full `react`); log and wrap scales; `lock` removes drift; output always inside min…max. Spin: the phase advances by `spin / 60` turns per second and stays in 0…1; with `base` 0 and `react` > 0 it holds where the sound left it; with `base` 0 and `react` 0 it returns to exactly 0 by the shortest way with no frame moving it more than 0.05 turn.
 - **sequencer:** same seed + same beat stream → same motif sequence; no motif repeats within 3 transitions (count ≥ 5); in silence a morph still starts after `holdBeats × 0.5 s`; with `holdBeats` 0, HOLD lasts at most 1 frame; `uMorphT` is continuous: at 60 fps no frame changes it by more than 0.05, including when a command arrives during a morph and when melt hold is entered or left at any position; the eased curve has `uMorphT = 0.5` at `p = 0.5` for every `linger`, zero speed at `p = 0` and `p = 1`, and is strictly increasing; inverting it returns `p` within 1e-4.
 - **presets:** save → export → import round-trip is identical; randomize and mutate never change locked params and never leave rand or min…max ranges; crossfade endpoints are exact; undo restores the previous Look; hue interpolates the short way.
 - **store:** every message type; unknown messages are ignored; a corrupt `localStorage` value falls back to defaults.

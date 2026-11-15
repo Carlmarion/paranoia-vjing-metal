@@ -154,14 +154,18 @@ const holdSeg = new Seg<HoldBeats>(HOLD_BEATS, HOLD_BEATS.map((v) => (v === 0 ? 
 const morphSeg = new Seg<MorphBeats>(MORPH_BEATS, MORPH_BEATS.map(String), (v) => send({ t: 'setOption', key: 'morphBeats', value: v }), row('morph beats', left));
 const meltSeg = new Seg<MeltMode>(MELT_MODES, ['blend', 'fuse', 'spatial'], (v) => send({ t: 'setOption', key: 'meltMode', value: v }), row('melt', left));
 
-type BoolOption = 'mirrorX' | 'mirrorY' | 'spin';
+type BoolOption = 'mirrorX' | 'mirrorY';
 const toggleOption = (key: BoolOption): void => {
   if (last) send({ t: 'setOption', key, value: !last.state.look.options[key] });
 };
 const mirrorRow = row('mirror', left);
 const mirrorXBtn = toggleBtn('X', () => toggleOption('mirrorX'), mirrorRow);
 const mirrorYBtn = toggleBtn('Y', () => toggleOption('mirrorY'), mirrorRow);
-const spinBtn = toggleBtn('spin', () => toggleOption('spin'), row('rotate', left));
+/** Speed (turns/min) the spin shortcut sets; pressing it again sets 0. */
+const SPIN_SHORTCUT_RPM = 1;
+const spinBtn = toggleBtn('spin', () => {
+  if (last) send({ t: 'setParam', id: 'spin', field: 'base', value: last.state.look.params.spin.base === 0 ? SPIN_SHORTCUT_RPM : 0 });
+}, row('rotate', left));
 
 const hueEverySeg = new Seg<HueJumpEvery>(HUE_JUMP_EVERY, HUE_JUMP_EVERY.map((v) => (v === 0 ? 'off' : String(v))),
   (v) => send({ t: 'setOption', key: 'hueJumpEvery', value: v }), row('hue jump', left));
@@ -402,7 +406,7 @@ function applyState(msg: StateMsg): void {
   hueAmt.set(o.hueJumpAmt);
   setOn(mirrorXBtn, o.mirrorX);
   setOn(mirrorYBtn, o.mirrorY);
-  setOn(spinBtn, o.spin);
+  setOn(spinBtn, look.params.spin.base !== 0);
 
   setOn(freezeBtn, session.frozen);
   setOn(fallbackBtn, session.fallback);

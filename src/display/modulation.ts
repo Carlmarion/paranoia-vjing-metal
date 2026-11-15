@@ -37,7 +37,7 @@ export interface Modulation {
   warpPhase: number;
   spikePhase: number;
   wavePhase: number;
-  /** Turns, 0…1: spins at `spin` turns/min while the spin option is on, glides back to upright when off. */
+  /** Turns, 0…1: turns at the effective `spin` speed (turns/min); glides back upright while spin is fully off. */
   spinPhase: number;
 }
 
@@ -53,7 +53,7 @@ const I_WARP_SPEED = PARAM_INDEX.warpSpeed;
 const I_SPIKE_SPEED = PARAM_INDEX.spikeSpeed;
 const I_WAVE_SPEED = PARAM_INDEX.waveSpeed;
 const I_SPIN = PARAM_INDEX.spin;
-/** Time constant (s) of the glide back to upright when spin is turned off. */
+/** Time constant (s) of the glide back to upright when spin is fully off (base 0, react 0). */
 export const SPIN_RETURN_TAU = 0.4;
 
 /**
@@ -75,9 +75,10 @@ export function modulate(m: Modulation, look: Look, session: Session, frame: Aud
   m.warpPhase += m.values[I_WARP_SPEED] * dt;
   m.spikePhase += m.values[I_SPIKE_SPEED] * dt;
   m.wavePhase = wrapPhase(m.wavePhase + m.values[I_WAVE_SPEED] * dt);
-  m.spinPhase = look.options.spin
-    ? fract(m.spinPhase + (m.values[I_SPIN] / 60) * dt)
-    : glideUpright(m.spinPhase, dt);
+  const spin = look.params.spin;
+  m.spinPhase = spin.base === 0 && spin.react === 0
+    ? glideUpright(m.spinPhase, dt)
+    : fract(m.spinPhase + (m.values[I_SPIN] / 60) * dt);
 }
 
 /** Ease a 0…1 turn phase toward the nearest whole turn (shortest way); snaps to exactly 0 when close. */

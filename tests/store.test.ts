@@ -154,9 +154,9 @@ describe('messages', () => {
     const m = apply(fresh(),
       { t: 'setOption', key: 'meltMode', value: 2 }, { t: 'setOption', key: 'mirrorX', value: true },
       { t: 'setOption', key: 'mirrorY', value: true }, { t: 'setOption', key: 'hueJumpEvery', value: 8 },
-      { t: 'setOption', key: 'hueJumpAmt', value: 0.9 }, { t: 'setOption', key: 'holdBeats', value: 128 }, { t: 'setOption', key: 'spin', value: true },
+      { t: 'setOption', key: 'hueJumpAmt', value: 0.9 }, { t: 'setOption', key: 'holdBeats', value: 128 },
       { t: 'setOption', key: 'morphBeats', value: 4 });
-    expect(m.state.look.options).toEqual({ meltMode: 2, mirrorX: true, mirrorY: true, hueJumpEvery: 8, hueJumpAmt: 0.5, holdBeats: 128, morphBeats: 4, spin: true });
+    expect(m.state.look.options).toEqual({ meltMode: 2, mirrorX: true, mirrorY: true, hueJumpEvery: 8, hueJumpAmt: 0.5, holdBeats: 128, morphBeats: 4 });
   });
 
   test('setSession: every key', () => {
