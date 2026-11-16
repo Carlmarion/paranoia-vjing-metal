@@ -52,7 +52,12 @@ let manifest: Manifest | null = null;
 let atlas: ArrayBuffer | null = null;
 let renderer: Renderer | null = null;
 let library: Library | null = null; // created once the manifest is known (B12.3)
-const NO_SHAPES: ShapeLookup = { isShape: () => false, drawnLayer: () => null };
+/** Until the library is up (IndexedDB can be slow or blocked), the baked shapes still work on their own. */
+const bakedOnly: ShapeLookup = {
+  isShape: (l) => Number.isInteger(l) && l >= 0 && l < (manifest?.count ?? 0),
+  drawnLayer: () => null,
+};
+const bakedPool = (): number[] => Array.from({ length: manifest?.count ?? 0 }, (_, i) => i);
 let fatal: string | null = null;
 let audioError: string | null = null;
 
@@ -124,7 +129,7 @@ function sendState(): void {
 
 function apply(msg: unknown): void {
   if (!booted) return;
-  const r = reduce(model, msg, { rng: presetsRng, nowMs: Date.now(), shapes: library ?? NO_SHAPES });
+  const r = reduce(model, msg, { rng: presetsRng, nowMs: Date.now(), shapes: library ?? bakedOnly });
   model = r.model;
   for (const e of r.effects) {
     if (e.t === 'seq') seq.command(e.cmd);
@@ -248,9 +253,9 @@ function frame(nowMs: number): void {
 
   model = tick(model, dt);
   const s0 = model.state;
-  const shapes = library ?? NO_SHAPES;
+  const shapes = library ?? bakedOnly;
   const so = seq.step(dt, audio, {
-    pool: library?.pool() ?? [], exists: (l) => shapes.isShape(l), options: s0.look.options, session: s0.session, linger: lastLinger,
+    pool: library?.pool() ?? bakedPool(), exists: (l) => shapes.isShape(l), options: s0.look.options, session: s0.session, linger: lastLinger,
   });
   model = patchSession(model, so.sessionPatch);
   library?.frame(so);

@@ -256,6 +256,9 @@ function cmd(model: Model, name: unknown, arg: unknown, env: Env): Result {
 
 const SHAPE_MSGS = new Set(['shapeSave', 'shapeDelete', 'shapeRename', 'shapeEnable', 'shapeDuplicate', 'shapeGet', 'shapesImport']);
 
+/** Ending live also drops a melt hold pressed meanwhile (the sequencer ignored it in LIVE HOLD, B7.6). */
+const LIVE_ENDS: Partial<Session> = { live: false, meltHold: false };
+
 /** B12.5 live mode: the store owns `session.live`; library.ts owns the live layer. */
 function live(model: Model, m: Record<string, unknown>): Result {
   const isLive = model.state.session.live;
@@ -269,7 +272,7 @@ function live(model: Model, m: Record<string, unknown>): Result {
         };
       }
       if (m.on === false && isLive) {
-        return { model: patchSession(model, { live: false }), effects: [lib(m), { t: 'seq', cmd: { name: 'live', on: false } }] };
+        return { model: patchSession(model, LIVE_ENDS), effects: [lib(m), { t: 'seq', cmd: { name: 'live', on: false } }] };
       }
       return { model, effects: [] };
     case 'liveStrokes':
@@ -283,11 +286,11 @@ function live(model: Model, m: Record<string, unknown>): Result {
     case 'liveDone':
       if (!isNum(m.layer)) return { model, effects: [] };
       return {
-        model: patchSession(model, { live: false, autoAdvance: false }), // the flow is restarted by hand
+        model: patchSession(model, { ...LIVE_ENDS, autoAdvance: false }), // the flow is restarted by hand
         effects: [{ t: 'seq', cmd: { name: 'finish', layer: m.layer } }],
       };
     case 'liveAbort':
-      return { model: patchSession(model, { live: false }), effects: [{ t: 'seq', cmd: { name: 'live', on: false } }] };
+      return { model: patchSession(model, LIVE_ENDS), effects: [{ t: 'seq', cmd: { name: 'live', on: false } }] };
     default:
       return { model, effects: [] };
   }

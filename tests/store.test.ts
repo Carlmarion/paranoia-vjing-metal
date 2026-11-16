@@ -316,6 +316,13 @@ describe('shapes and live (B12)', () => {
     expect(reduce(fresh(), { ...fin, id: 'abc' }, env()).effects).toEqual([{ t: 'library', msg: { t: 'shapeSave', id: 'abc', name: 'x', strokes } }]);
   });
 
+  test('melt hold pressed during live never outlives it', () => {
+    const held = apply(fresh(), { t: 'live', on: true, strokes }, { t: 'setSession', key: 'meltHold', value: true });
+    for (const end of [{ t: 'live', on: false }, { t: 'liveDone', layer: 12 }, { t: 'liveAbort' }]) {
+      expect(reduce(held, end, env()).model.state.session.meltHold).toBe(false);
+    }
+  });
+
   test('live off melts back; the library finishing or aborting ends live', () => {
     const live = apply(fresh(), { t: 'live', on: true, strokes });
     const off = reduce(live, { t: 'live', on: false }, env());

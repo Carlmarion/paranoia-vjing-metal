@@ -442,7 +442,7 @@ Both curves have zero speed at p = 0 and p = 1, so a morph starts and lands with
 ### B7.6 Live and replay (`sequencer.ts`)
 The live layer (`LIVE = MAX_LAYERS − 1`) is a motif like any other for the shader; what changes is who writes it (B12.5).
 
-- **`live(true)`**: a `goto(LIVE)` with the normal rule (a running morph is sped up first). The store clears `meltHold` when it applies `live(true)` or starts a replay, so the melt always runs. The shape on screen melts into the drawing with the current melt mode and `morphBeats`. The sequencer remembers `liveFrom = A`. After landing it enters **LIVE HOLD**: no auto-advance, `next/prev/random/goto/queue/replay` are ignored, `meltHold` is ignored. The drawing changes freely underneath (texture uploads), with no morph. `LIVE` never enters `history` or `recent`, so `prev` never returns to a stale drawing.
+- **`live(true)`**: a `goto(LIVE)` with the normal rule (a running morph is sped up first). The store clears `meltHold` when it applies `live(true)` or starts a replay, so the melt always runs, and again when live ends (off, finish, abort), so a hold pressed during live never outlives it. The shape on screen melts into the drawing with the current melt mode and `morphBeats`. The sequencer remembers `liveFrom = A`. After landing it enters **LIVE HOLD**: no auto-advance, `next/prev/random/goto/queue/replay` are ignored, `meltHold` is ignored. The drawing changes freely underneath (texture uploads), with no morph. `LIVE` never enters `history` or `recent`, so `prev` never returns to a stale drawing.
 - **`live(false)`** (the red dot switched off): a `goto(liveFrom)`, with the B7.3 rule if the melt into LIVE is still running (it is sped up to land within 1 s, then the way back starts). The projector melts back to what it showed before.
 - **`finish(layer)`**: a pending command under the B7.3 rule: if the melt into LIVE is still running it is sped up to land within 1 s first. Once landed, the Display has copied the live SDF into `layer`, so the picture is identical: set `A = B = layer`, `uMorphT = 0`, phase HOLD with `remaining = holdBeats`. No frame changes the picture. The store sets `session.autoAdvance = false` and `session.live = false`: the flow is restarted by hand (auto, Next, or flow). `finish` with no free slot (`free = 0`) saves nothing: the store answers `shapeError` and runs `live(false)`.
 - **`replay(layer)`** (a drawn shape only): a `goto(LIVE)` while `library.ts` rebuilds the live layer from a growing prefix of the shape's strokes (B12.6). The reveal and the melt share the same clock: both complete at `morphBeats × beatPeriod`. When the reveal is complete the sequencer runs `finish(layer)` itself, **without** touching `autoAdvance` (a replay is a transition, not a live session). If `blackout` is on when a replay starts, the store releases blackout and the melt source is the blank live layer, so the drawing appears on black.
@@ -746,13 +746,13 @@ M0 passed on 14 Nov on the venue chain (mixer → Focusrite → Display → proj
 1. Laptop on mains. Disable sleep, screensaver, notifications, night mode, automatic updates.
 2. Display settings: **extended**, not mirrored. Projector at its native resolution.
 3. Mixer REC or BOOTH out → Focusrite 1–2. Check the Focusrite is on LINE.
-4. `npm run build && npm run preview`.
+4. Stop `npm run dev`, then `npm run build && npm run preview`. The preview serves on 5173, the address used all week: presets, calibration and drawn shapes are stored per address in the browser.
 5. Launch Chrome with throttling off (these switches stop Chrome from slowing a window it thinks is hidden):
 ```
-chrome --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding http://localhost:4173/
+chrome --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding http://localhost:5173/
 ```
 6. Drag that window to the projector, click once (starts audio, allow the microphone), press Enter (fullscreen).
-7. Open `http://localhost:4173/control.html` in a second window on the laptop screen. Check the level meter and beat LED.
+7. Open `http://localhost:5173/control.html` in a second window on the laptop screen. Check the level meter and beat LED.
 8. Load a calm preset. Set `presetCycleMin` and autopilot as rehearsed.
 9. Never minimise the Display window. Emergency keys: `Z`, `B`, `K`.
 10. Bring: spare HDMI cable and adapter, spare audio cable, charger, the exported presets JSON on a USB stick.

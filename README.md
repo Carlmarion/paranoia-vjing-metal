@@ -52,9 +52,11 @@ In the dashboard, press **Draw** (or `P`). The modal always opens in not-live mo
 
 ## Show day
 
+`npm run preview` serves on **5173**, the same address as `npm run dev`, so the presets, calibration and drawn shapes made during the week are there on the night. Stop `npm run dev` first (both use the port).
+
 ```sh
 npm run build && npm run preview
-chrome --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding http://localhost:4173/
+chrome --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding http://localhost:5173/
 ```
 
 The full runbook is in SPEC D4.
