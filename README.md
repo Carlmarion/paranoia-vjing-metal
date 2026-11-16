@@ -38,11 +38,25 @@ Other query params: `?seed=<n>` (default: today as YYYYMMDD), `?scale=0.75` (ren
 
 Click or press a key once in the Display window to start the audio. That first press does nothing else. `D` shows the debug overlay (meters, raw dB, BPM, sequencer, soak-log download).
 
+## Drawing tool
+
+In the dashboard, press **Draw** (or `P`). The modal always opens in not-live mode.
+
+- One round brush, the thick placeholder weight (100 px at 2048). `E` eraser, `B` brush.
+- Symmetry: `free · X · Y · XY · R4 · R6 · R8` (`M` cycles). One hand stroke draws every copy; undo removes them together.
+- Ghost: a faint shape under the canvas to trace over. "current" follows the projector.
+- `Z` undo, `Shift+Z` redo. Closing (`Esc`, Close, Save) always saves a non-empty drawing; clear the canvas first to leave without saving.
+- **LIVE** (`L`): the projector melts into your drawing and follows the mouse. **Finish** keeps it on screen and turns auto-advance off: restart the flow by hand. If the dashboard closes while live, the projector finishes on its own after 3 s.
+- Tiles: the checkbox keeps a shape in or out of random choice. Drawn shapes have edit ✎, duplicate ⧉, draw in ▶ (replays the drawing stroke by stroke; from blackout it appears on black), PNG ⤓ and delete ✕.
+- Drawn shapes live in this Chrome profile (IndexedDB). **Export shapes** saves them to JSON; a tile's PNG goes in `art/png/` to bake it for good.
+
 ## Show day
+
+`npm run preview` serves on **5173**, the same address as `npm run dev`, so the presets, calibration and drawn shapes made during the week are there on the night. Stop `npm run dev` first (both use the port).
 
 ```sh
 npm run build && npm run preview
-chrome --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding http://localhost:4173/
+chrome --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding http://localhost:5173/
 ```
 
 The full runbook is in SPEC D4.
@@ -84,6 +98,15 @@ These are choices the spec left open, or interpretations made while building.
 - The warp and spike phases are never wrapped, because a wrap made the shape jump. The shader hash is an integer hash, which stays exact however large the phases grow. The wave phase wraps at 1000. SPEC B4.3 is amended to match.
 - Grain uses a per-frame offset of `(127, 311) × frame`, so the noise doesn't drift diagonally.
 
+**Drawing tool (B12)**
+- `strokes.ts`, `sdf.ts` and `raster.ts` are in `src/shared/`: the Control (modal, ghost, PNG) and the Display (bake worker, thumbnails) use the same code.
+- Infrastructure is split out of `library.ts` so it is tested with fakes: `baker.ts` (one worker per purpose, the newest request per key replaces a waiting one), `shapedb.ts` (IndexedDB). The dashboard side is `draw.ts` (modal), `shapes.ts` (grid), `shapeclient.ts` (stroke requests, baked ghosts, PNG).
+- The distance transform skips rows and columns that are all ink or all empty; a worst-case 1024² ring bakes in about 46 ms in Node.
+- Replay: the copies of one symmetric stroke grow together, as they were drawn. SPEC B12.6 is amended to match.
+- `liveFinish` arriving after live already ended (the safety net fired first) is kept as a plain save, so a drawing is never lost.
+- A deleted shape's layer is not reused until it has been cleared (it stays visible until the projector moves away), so `free` also counts those layers as taken.
+- Escape, Close and Save do the same thing, by the closing rules: save (or finish when live) and close.
+
 **Tooling**
 - TypeScript is pinned to 6.0, because typescript-eslint does not support 7 yet.
 
@@ -92,3 +115,4 @@ These are choices the spec left open, or interpretations made while building.
 - **Rendering:** checked in headless Chrome (SwiftShader) only. The shader compiles, `/?src=synth` renders the placeholder motifs, and no console errors appear. Not yet seen: real-GPU frame rate, the morphs over time, and the reaction to music.
 - **Audio:** the Web Audio paths (`input.ts`, `analyser.ts`) are only type-checked. Line-in, file playback and the synth have not been heard or measured.
 - **Thresholds:** the default `floorDb` (−60 dB) is a guess until M1.
+- **Drawing tool:** driven in headless Chrome (SwiftShader) only: modal, R6 symmetry, undo/redo per group, live melt into the drawing, mid-stroke updates, Finish, edit and re-save, the safety net, and replay from blackout. Not yet felt with a real mouse, not measured on the show laptop: the bake budget (≤ 60 ms) in the worker including the canvas raster, and the projector's fps while drawing live.

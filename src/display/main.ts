@@ -2,14 +2,21 @@
 import { PARAM_INDEX } from '../shared/params';
 import { clamp, streamRng } from '../shared/math';
 import { dateSeed, getStorage } from '../shared/state';
-import { createBroadcastTransport, type DeviceInfo, type Manifest, type Msg } from '../shared/protocol';
+import { DISPLAY_MSG_TYPES, createBroadcastTransport, type DeviceInfo, type Manifest, type Msg } from '../shared/protocol';
+import { drawStrokes } from '../shared/raster';
+import type { Stroke } from '../shared/strokes';
 import { keyAction, isTyping } from '../shared/keys';
 import { Renderer } from './gl';
 import { Debug } from './debug';
 import { Analyser } from './audio/analyser';
 import { idleFrame } from './audio/dsp';
 import { listDevices, openInput, parseSource, type AudioInput } from './audio/input';
-import { initialModel, patchSession, Persister, recallPreset, reduce, renderLook, tick, withDefaultPresets, type Model } from './store';
+import {
+  initialModel, patchSession, Persister, recallPreset, reduce, renderLook, tick, withDefaultPresets, type Model, type ShapeLookup,
+} from './store';
+import { Library } from './library';
+import { WorkerBaker } from './baker';
+import { openShapeDB } from './shapedb';
 import { Sequencer } from './sequencer';
 import { Autopilot, PRESET_CYCLE_FADE_S } from './autopilot';
 import { createModulation, modulate } from './modulation';
@@ -44,6 +51,13 @@ let booted = false;
 let manifest: Manifest | null = null;
 let atlas: ArrayBuffer | null = null;
 let renderer: Renderer | null = null;
+let library: Library | null = null; // created once the manifest is known (B12.3)
+/** Until the library is up (IndexedDB can be slow or blocked), the baked shapes still work on their own. */
+const bakedOnly: ShapeLookup = {
+  isShape: (l) => Number.isInteger(l) && l >= 0 && l < (manifest?.count ?? 0),
+  drawnLayer: () => null,
+};
+const bakedPool = (): number[] => Array.from({ length: manifest?.count ?? 0 }, (_, i) => i);
 let fatal: string | null = null;
 let audioError: string | null = null;
 
@@ -115,19 +129,54 @@ function sendState(): void {
 
 function apply(msg: unknown): void {
   if (!booted) return;
-  const r = reduce(model, msg, { rng: presetsRng, nowMs: Date.now(), motifCount: manifest?.count ?? 1 });
+  const r = reduce(model, msg, { rng: presetsRng, nowMs: Date.now(), shapes: library ?? bakedOnly });
   model = r.model;
   for (const e of r.effects) {
     if (e.t === 'seq') seq.command(e.cmd);
-    else if (e.t === 'sendState') sendState();
+    else if (e.t === 'seqForget') seq.forget(e.layer);
+    else if (e.t === 'library') library?.handle(e.msg);
+    else if (e.t === 'sendState') { sendState(); if (library) transport.send(library.meta()); }
     else if (e.t === 'restartInput') void openSource();
   }
 }
 
 transport.onMessage((msg: Msg) => {
-  if (msg.t === 'state' || msg.t === 'meters') return; // another Display; ignore
+  if (DISPLAY_MSG_TYPES.has(msg.t)) return; // another Display's traffic; ignore
   apply(msg);
 });
+
+// ---------- shape library (B12) ----------
+
+const THUMB_PX = 160;
+const thumbCanvas = document.createElement('canvas');
+thumbCanvas.width = thumbCanvas.height = THUMB_PX;
+
+/** White ink on transparent, like the bake's thumbs. */
+function renderThumb(strokes: Stroke[]): string | null {
+  const ctx = thumbCanvas.getContext('2d');
+  if (!ctx) return null;
+  ctx.clearRect(0, 0, THUMB_PX, THUMB_PX);
+  drawStrokes(ctx, strokes, THUMB_PX);
+  return thumbCanvas.toDataURL('image/png');
+}
+
+async function startLibrary(m: Manifest): Promise<void> {
+  library = new Library({
+    cell: m.cell,
+    bakedCount: m.count,
+    bakedNames: m.motifs.map((x) => x.file.replace(/\.png$/i, '')),
+    db: await openShapeDB(),
+    bake: { library: new WorkerBaker(m.cell), live: new WorkerBaker(m.cell) },
+    upload: (layer, half) => renderer?.uploadLayer(layer, half),
+    thumb: renderThumb,
+    storage,
+    send: (msg) => transport.send(msg),
+    emit: (msg) => apply(msg),
+    newId: () => crypto.randomUUID(),
+    now: () => Date.now(),
+  });
+  await library.boot();
+}
 
 // ---------- input: keys, cursor, wake lock ----------
 
@@ -165,6 +214,7 @@ function initRenderer(): void {
   renderer = new Renderer(gl);
   try {
     renderer.init(atlas, manifest);
+    library?.reuploadAll(); // after a context restore, drawn shapes are uploaded again
   } catch (e) {
     fatal = `gl: ${errMsg(e)}`;
   }
@@ -200,12 +250,15 @@ function frame(nowMs: number): void {
 
   const running = actx?.state === 'running';
   const audio = running && analyser ? analyser.read(dt, model.state.calib) : idleFrame();
-  const count = manifest?.count ?? 1;
 
   model = tick(model, dt);
   const s0 = model.state;
-  const so = seq.step(dt, audio, { count, options: s0.look.options, session: s0.session, linger: lastLinger });
+  const shapes = library ?? bakedOnly;
+  const so = seq.step(dt, audio, {
+    pool: library?.pool() ?? bakedPool(), exists: (l) => shapes.isShape(l), options: s0.look.options, session: s0.session, linger: lastLinger,
+  });
   model = patchSession(model, so.sessionPatch);
+  library?.frame(so);
   const ap = autopilot.step(dt, so.beats, audio, {
     options: model.state.look.options, session: model.state.session,
     presets: model.state.presets, currentPreset: model.currentPreset,
@@ -247,7 +300,7 @@ function frame(nowMs: number): void {
   }
   debug.update(dt, {
     audio, fps, phase: so.phase, motifA, motifB, morphT, holdRemaining: so.holdRemaining,
-    seed, device: input?.label ?? 'none', error,
+    seed, device: input?.label ?? 'none', error, live: model.state.session.live,
   }, (nowMs - startMs) / 1000);
 }
 
@@ -271,6 +324,7 @@ async function boot(): Promise<void> {
       if (!res.ok) throw new Error(`sdf/atlas.bin: HTTP ${res.status}`);
       atlas = await res.arrayBuffer();
       initRenderer();
+      void startLibrary(manifest).catch((e: unknown) => { console.error('library', e); });
     } catch (e) {
       fatal = `assets: ${errMsg(e)}`;
     }

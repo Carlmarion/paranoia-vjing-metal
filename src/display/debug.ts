@@ -12,6 +12,8 @@ export interface DebugInfo {
   seed: number;
   device: string;
   error: string | null;
+  /** The live layer is on the projector (B12.5). */
+  live: boolean;
 }
 
 export interface SoakEntry { t: number; fpsAvg: number; fpsMin: number; heapMB: number; motif: number; beatCount: number; }
@@ -85,7 +87,7 @@ export class Debug {
       `raw dB low ${db(a.rawDb[0])}  mid ${db(a.rawDb[1])}  high ${db(a.rawDb[2])}  all ${db(a.rawDb[3])}`,
       `level ${db(a.levelDb)} dB${a.clip ? '  CLIP' : ''}`,
       `fps ${info.fps.toFixed(0)}`,
-      `seq ${info.phase}  ${info.motifA} → ${info.motifB}  t ${info.morphT.toFixed(2)}  hold ${info.holdRemaining.toFixed(0)}`,
+      `seq ${info.phase}  ${info.motifA} → ${info.motifB}  t ${info.morphT.toFixed(2)}  hold ${info.holdRemaining.toFixed(0)}${info.live ? '  LIVE' : ''}`,
       `seed ${info.seed}  input ${info.device}`,
       info.error ? `ERROR ${info.error}` : '',
     ].join('\n');

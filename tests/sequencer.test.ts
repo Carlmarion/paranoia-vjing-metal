@@ -8,6 +8,7 @@ import { Autopilot, type AutopilotContext } from '../src/display/autopilot';
 import { initialModel, reduce } from '../src/display/store';
 import { savePreset } from '../src/display/presets';
 import { emptyPresets, defaultLook } from '../src/shared/state';
+import { LIVE_LAYER } from '../src/shared/protocol';
 
 const FPS = 60;
 const DT = 1 / FPS;
@@ -25,14 +26,20 @@ class Sim {
   linger = 0.5;
   t = 0;
   outs: SeqOutput[] = [];
+  /** Enabled layers in library order (B12.3); every layer by default. */
+  pool: number[];
   constructor(seed: number, public count = 12, opts: Partial<LookOptions> = {}, sess: Partial<Session> = {}) {
+    this.pool = Array.from({ length: count }, (_, i) => i);
     this.options = { ...defaultOptions(), ...opts };
     this.session = { ...defaultSession(), ...sess };
     this.seq = new Sequencer(seed, this.options.holdBeats);
   }
   step(frame: AudioFrame = silentFrame()): SeqOutput {
     this.t += DT;
-    const o = this.seq.step(DT, frame, { count: this.count, options: this.options, session: this.session, linger: this.linger });
+    const o = this.seq.step(DT, frame, {
+      pool: this.pool, exists: (l) => (l >= 0 && l < this.count) || l === LIVE_LAYER,
+      options: this.options, session: this.session, linger: this.linger,
+    });
     if (o.sessionPatch) this.session = { ...this.session, ...o.sessionPatch };
     this.outs.push(o);
     return o;
@@ -148,6 +155,170 @@ describe('motif order', () => {
     s.run(20);
     expect(s.shown()[1]).toBe(9);
     expect(s.session.queued).toBeNull();
+  });
+});
+
+describe('the pool (B12.3)', () => {
+  test('only enabled layers are ever chosen, at random or in order', () => {
+    const s = new Sim(9, 12, { holdBeats: 16, morphBeats: 4 });
+    s.pool = [1, 3, 5, 7, 9];
+    s.run(300);
+    const seq = s.shown().slice(1);
+    expect(seq.length).toBeGreaterThan(20);
+    for (const m of seq) expect(s.pool).toContain(m);
+    const q = new Sim(9, 12, { holdBeats: 16, morphBeats: 4 }, { order: 'sequential' });
+    q.pool = [2, 4, 6];
+    q.run(80);
+    expect(q.shown().slice(0, 5)).toEqual([0, 2, 4, 6, 2]);
+  });
+
+  test('an empty pool never starts a morph; a pool of one outside A goes there once', () => {
+    const e = new Sim(9, 12, { holdBeats: 16, morphBeats: 4 });
+    e.pool = [];
+    e.run(60);
+    expect(e.outs.every((o) => o.phase === 'hold' && o.motifA === 0)).toBe(true);
+    const one = new Sim(9, 12, { holdBeats: 16, morphBeats: 4 });
+    one.pool = [4];
+    one.run(60);
+    expect(one.shown()).toEqual([0, 4]);
+  });
+
+  test('goto and queued reach a shape outside the pool', () => {
+    const s = new Sim(9, 12, { holdBeats: 128, morphBeats: 4 });
+    s.pool = [1, 2];
+    s.step();
+    s.seq.command({ name: 'goto', index: 7 });
+    expect(s.step().motifB).toBe(7);
+    const q = new Sim(9, 12, { holdBeats: 16, morphBeats: 4 }, { queued: 10 });
+    q.pool = [1, 2];
+    q.run(20);
+    expect(q.shown()[1]).toBe(10);
+  });
+});
+
+describe('live and replay (B7.6)', () => {
+  /** A Sim that has landed on motif 5 and holds for a long time. */
+  const onFive = (): Sim => {
+    const s = new Sim(3, 12, { holdBeats: 128, morphBeats: 4 }); // 2 s morphs in silence
+    s.step();
+    s.seq.command({ name: 'goto', index: 5 });
+    s.run(3);
+    expect(s.outs.at(-1)?.motifA).toBe(5);
+    return s;
+  };
+
+  test('live(true) melts A into LIVE with the normal timing and continuity', () => {
+    const s = onFive();
+    const i0 = s.outs.length;
+    s.seq.command({ name: 'live', on: true });
+    expect(s.step().motifB).toBe(LIVE_LAYER);
+    s.run(2.1);
+    const landed = s.outs.findIndex((o, i) => i > i0 && o.motifA === LIVE_LAYER);
+    expect((landed - i0) / FPS).toBeCloseTo(2, 1);
+    expectContinuous(s.outs);
+  });
+
+  test('while live: no auto-advance, next/random/goto/replay and melt hold are ignored', () => {
+    const s = onFive();
+    s.options = { ...s.options, holdBeats: 16 };
+    s.seq.command({ name: 'live', on: true });
+    s.run(3);
+    for (const c of [{ name: 'next' }, { name: 'random' }, { name: 'goto', index: 2 }, { name: 'replay', layer: 7, fromBlank: false }] as SeqCommand[]) {
+      s.seq.command(c);
+      s.run(1);
+    }
+    s.session = { ...s.session, meltHold: true };
+    s.run(30);
+    expect(s.outs.slice(-60 * 30).every((o) => o.motifA === LIVE_LAYER && o.motifB === LIVE_LAYER && o.morphT === 0)).toBe(true);
+  });
+
+  test('live(false) melts back to the previous A; LIVE never enters the history', () => {
+    const s = onFive();
+    s.seq.command({ name: 'live', on: true });
+    s.run(3);
+    s.seq.command({ name: 'live', on: false });
+    s.run(3);
+    expect(s.outs.at(-1)?.motifA).toBe(5);
+    expectContinuous(s.outs);
+    expect(s.seq.history).not.toContain(LIVE_LAYER);
+    s.seq.command({ name: 'prev' });
+    expect(s.step().motifB).toBe(0); // before 5 came 0, never the drawing
+  });
+
+  test('live(false) during the melt into LIVE speeds it up, then melts back', () => {
+    const s = onFive();
+    s.options = { ...s.options, morphBeats: 64 }; // 32 s
+    s.seq.command({ name: 'live', on: true });
+    s.run(4);
+    s.seq.command({ name: 'live', on: false });
+    s.run(1.2 + 32);
+    expect(s.outs.at(-1)?.motifA).toBe(5);
+    expectContinuous(s.outs);
+  });
+
+  test('finish(layer) after landing swaps LIVE for the layer with no frame changing the picture', () => {
+    const s = onFive();
+    s.seq.command({ name: 'live', on: true });
+    s.run(3);
+    s.seq.command({ name: 'finish', layer: 20 });
+    const before = s.outs.at(-1)!;
+    const o = s.step();
+    expect([before.motifA, before.motifB, before.morphT]).toEqual([LIVE_LAYER, LIVE_LAYER, 0]);
+    expect([o.motifA, o.motifB, o.morphT, o.phase]).toEqual([20, 20, 0, 'hold']);
+    expect(o.holdRemaining).toBe(128);
+  });
+
+  test('finish during the melt into LIVE lands within 1 s first, then swaps', () => {
+    const s = onFive();
+    s.options = { ...s.options, morphBeats: 64 };
+    s.seq.command({ name: 'live', on: true });
+    s.run(4);
+    const i0 = s.outs.length;
+    s.seq.command({ name: 'finish', layer: 20 });
+    s.run(1.2);
+    const swap = s.outs.findIndex((o, i) => i >= i0 && o.motifA === 20);
+    expect(swap).toBeGreaterThan(0);
+    expect((swap - i0) / FPS).toBeLessThanOrEqual(1 + 2 * DT);
+    expectContinuous(s.outs.slice(0, swap));
+    expect(s.outs[swap - 1].motifB).toBe(LIVE_LAYER);
+    expect(s.outs[swap - 1].morphT).toBe(1);
+  });
+
+  test('replay reaches q = 1 at morphBeats × beatPeriod, then holds on the layer', () => {
+    const s = onFive();
+    const i0 = s.outs.length;
+    s.seq.command({ name: 'replay', layer: 30, fromBlank: false });
+    s.run(3);
+    const outs = s.outs.slice(i0);
+    const qs = outs.filter((o) => o.replay).map((o) => o.replay!.q);
+    expect(qs[0]).toBe(0);
+    for (let i = 1; i < qs.length; i++) expect(qs[i]).toBeGreaterThanOrEqual(qs[i - 1]);
+    expect(qs.at(-1)).toBe(1);
+    expect(qs.length / FPS).toBeCloseTo(2, 1);
+    expect(outs.every((o) => !o.replay || o.replay.layer === 30)).toBe(true);
+    expect(s.outs.at(-1)?.motifA).toBe(30);
+    expect(s.outs.at(-1)?.replay).toBeNull();
+    expect(s.outs.every((o) => o.sessionPatch === null || !('autoAdvance' in o.sessionPatch))).toBe(true);
+  });
+
+  test('replay from blank melts from the empty LIVE layer, not from A', () => {
+    const s = onFive();
+    s.seq.command({ name: 'replay', layer: 30, fromBlank: true });
+    const o = s.step();
+    expect([o.motifA, o.motifB]).toEqual([LIVE_LAYER, LIVE_LAYER]);
+    s.run(3);
+    expect(s.outs.at(-1)?.motifA).toBe(30);
+  });
+
+  test('forget(layer) removes a deleted shape from the history and the pending command', () => {
+    const s = onFive();
+    s.seq.command({ name: 'goto', index: 8 });
+    s.run(3);
+    s.seq.forget(5);
+    expect(s.seq.history).not.toContain(5);
+    s.seq.command({ name: 'goto', index: 5 });
+    s.seq.forget(5);
+    expect(s.step().phase).toBe('hold');
   });
 });
 
@@ -315,7 +486,7 @@ describe('randomness streams (B7.5)', () => {
     const run = (withRandomize: boolean) => {
       const s = new Sim(31, 12, { holdBeats: 16, morphBeats: 4 });
       let model = initialModel(31, null).model;
-      const env = { rng: streamRng(31, 'presets'), nowMs: 0, motifCount: 12 };
+      const env = { rng: streamRng(31, 'presets'), nowMs: 0, shapes: { isShape: (l: number) => l >= 0 && l < 12, drawnLayer: () => null } };
       for (let i = 0; i < 60 * 120; i++) {
         if (withRandomize && i % 97 === 0) {
           model = reduce(model, { t: 'cmd', name: i % 2 ? 'randomize' : 'mutate' }, env).model;

@@ -1,6 +1,7 @@
 // WebGL2 layer: program, fullscreen triangle, R16F array texture (SPEC B2.4, B5).
 import { GLSL_HEADER, PARAM_COUNT } from '../shared/params';
-import type { Manifest } from '../shared/protocol';
+import { MAX_LAYERS, type Manifest } from '../shared/protocol';
+import { blankHalf } from '../shared/sdf';
 import vertSrc from './shader.vert?raw';
 import fragSrc from './shader.frag?raw';
 
@@ -52,6 +53,7 @@ export class Renderer {
   private loc = {} as Record<UniformName, WebGLUniformLocation | null>;
   private tex: WebGLTexture | null = null;
   private vao: WebGLVertexArrayObject | null = null;
+  private cell = 0;
   /** Last shader error; the previous program keeps running (SPEC B5 notes). */
   error: string | null = null;
 
@@ -94,21 +96,39 @@ export class Renderer {
     }
   }
 
+  /**
+   * B2.4: one immutable array of MAX_LAYERS layers. The baked atlas fills layers 0…count−1; every other layer
+   * starts blank (+2, far from any line — a zero-filled layer would draw the whole screen as a line).
+   */
   private uploadAtlas(atlas: ArrayBuffer, m: Manifest): void {
     const gl = this.gl;
     const expected = m.cell * m.cell * m.count * 2;
     if (atlas.byteLength !== expected) {
       throw new Error(`atlas.bin is ${atlas.byteLength} bytes, manifest expects ${expected}`);
     }
+    if (m.count >= MAX_LAYERS) throw new Error(`${m.count} baked motifs: at most ${MAX_LAYERS - 1}`);
     if (this.tex) gl.deleteTexture(this.tex);
     this.tex = gl.createTexture();
+    this.cell = m.cell;
     gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.tex);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    gl.texImage3D(gl.TEXTURE_2D_ARRAY, 0, gl.R16F, m.cell, m.cell, m.count, 0, gl.RED, gl.HALF_FLOAT, new Uint16Array(atlas));
+    gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.R16F, m.cell, m.cell, MAX_LAYERS);
+    gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, 0, m.cell, m.cell, m.count, gl.RED, gl.HALF_FLOAT, new Uint16Array(atlas));
+    const blank = blankHalf(m.cell);
+    for (let layer = m.count; layer < MAX_LAYERS; layer++) this.uploadLayer(layer, blank);
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  }
+
+  /** Replace one layer (a drawn shape, the live layer, or blank). */
+  uploadLayer(layer: number, half: Uint16Array): void {
+    const gl = this.gl;
+    if (!this.tex || half.length !== this.cell * this.cell) return;
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.tex);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, layer, this.cell, this.cell, 1, gl.RED, gl.HALF_FLOAT, half);
   }
 
   draw(u: FrameUniforms): void {

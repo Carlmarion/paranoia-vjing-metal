@@ -1,6 +1,7 @@
 // Messages between Display and Control (B9) and the Transport that carries them.
 import type { ParamId, Band } from './params';
 import type { State, LookOptions, Session, Calib } from './state';
+import type { Stroke } from './strokes';
 
 /** B6.4 */
 export interface AudioFrame {
@@ -38,12 +39,47 @@ export interface Manifest {
 
 export interface DeviceInfo { deviceId: string; label: string; }
 
+/** Texture layers (B2.4): baked atlas first, drawn shapes after, the live layer last. */
+export const MAX_LAYERS = 64;
+export const LIVE_LAYER = MAX_LAYERS - 1;
+
 export type ParamField = 'base' | 'react' | 'band' | 'thr' | 'lock';
 
 export type CmdName =
   | 'next' | 'prev' | 'random' | 'goto' | 'queue'
   | 'randomize' | 'mutate' | 'reset' | 'undo'
-  | 'savePreset' | 'loadPreset' | 'deletePreset' | 'renamePreset' | 'importPresets';
+  | 'savePreset' | 'loadPreset' | 'deletePreset' | 'renamePreset' | 'importPresets'
+  | 'replay'; // arg: the ShapeKey of a drawn shape (B12.6)
+
+/** Stable identity of a library shape (B12.3); layers are for the shader and the sequencer only. */
+export type ShapeKey = `baked:${number}` | `drawn:${string}`;
+
+/** What the Control sees of the library (no strokes). */
+export interface ShapeMeta {
+  key: ShapeKey;
+  layer: number;
+  name: string;
+  enabled: boolean;
+  /** PNG data URL for drawn shapes; null for baked ones (their thumbs are files in sdf/thumbs/). */
+  thumb: string | null;
+  drawn: boolean;
+}
+
+/** Shape library and live drawing (B12, B9). Strokes travel as structured clones (Float32Array inside). */
+export type ShapeMsg =
+  | { t: 'shapeSave'; id?: string; name: string; strokes: Stroke[] }
+  | { t: 'shapeDelete'; id: string }
+  | { t: 'shapeRename'; id: string; name: string }
+  | { t: 'shapeEnable'; key: ShapeKey; enabled: boolean }
+  | { t: 'shapeDuplicate'; id: string }
+  | { t: 'shapeGet'; id: string }
+  | { t: 'shapesImport'; shapes: unknown };
+
+export type LiveMsg =
+  | { t: 'live'; on: true; strokes: Stroke[] }
+  | { t: 'live'; on: false }
+  | { t: 'liveStrokes'; strokes: Stroke[] }
+  | { t: 'liveFinish'; id?: string; name: string; strokes: Stroke[] };
 
 // Control → Display
 export type ControlMsg =
@@ -52,7 +88,9 @@ export type ControlMsg =
   | { t: 'setOption'; key: keyof LookOptions; value: number | boolean }
   | { t: 'setSession'; key: keyof Session; value: number | boolean | string | null }
   | { t: 'setCalib'; key: keyof Calib; value: number | string | null }
-  | { t: 'cmd'; name: CmdName; arg?: unknown };
+  | { t: 'cmd'; name: CmdName; arg?: unknown }
+  | ShapeMsg
+  | LiveMsg;
 
 // Display → Control
 export interface StateMsg { t: 'state'; state: State; manifest: Manifest | null; devices: DeviceInfo[]; }
@@ -63,7 +101,15 @@ export interface MetersMsg {
   motifA: number; motifB: number; morphT: number; holdRemaining: number; fps: number;
   error?: string;
 }
-export type DisplayMsg = StateMsg | MetersMsg;
+/** `free`: empty layer slots; `persistent`: false when IndexedDB is unavailable (shapes last for the session only). */
+export interface LibraryMsg { t: 'library'; version: number; shapes: ShapeMeta[]; free: number; persistent: boolean; }
+/** Answer to shapeGet, and after shapeDuplicate (`duplicateOf` = the original's id, `id` = the copy). */
+export interface ShapeStrokesMsg { t: 'shapeStrokes'; id: string; name: string; strokes: Stroke[]; duplicateOf?: string; }
+export interface ShapeErrorMsg { t: 'shapeError'; text: string; }
+export type DisplayMsg = StateMsg | MetersMsg | LibraryMsg | ShapeStrokesMsg | ShapeErrorMsg;
+
+/** Messages the Display only sends to Control windows: a Display ignores them (another Display's traffic). */
+export const DISPLAY_MSG_TYPES: ReadonlySet<string> = new Set(['state', 'meters', 'library', 'shapeStrokes', 'shapeError']);
 
 export type Msg = ControlMsg | DisplayMsg;
 
