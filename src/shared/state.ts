@@ -19,8 +19,6 @@ export interface LookOptions {
   hueJumpAmt: number; // 0…0.5 turns
   holdBeats: HoldBeats;
   morphBeats: MorphBeats;
-  /** continuous rotation at the `spin` param's speed (turns/min) */
-  spin: boolean;
 }
 
 /** A Look is what a preset stores. */
@@ -98,7 +96,7 @@ export function defaultParamState(def: ParamDef): ParamState {
 }
 
 export function defaultOptions(): LookOptions {
-  return { meltMode: 1, mirrorX: false, mirrorY: false, hueJumpEvery: 0, hueJumpAmt: 0.25, holdBeats: 32, morphBeats: 16, spin: false };
+  return { meltMode: 1, mirrorX: false, mirrorY: false, hueJumpEvery: 0, hueJumpAmt: 0.25, holdBeats: 32, morphBeats: 16 };
 }
 
 export function defaultLook(): Look {
@@ -174,7 +172,6 @@ export function migrateOptions(v: unknown): LookOptions {
     hueJumpAmt: num(v.hueJumpAmt, HUE_JUMP_AMT_RANGE[0], HUE_JUMP_AMT_RANGE[1], d.hueJumpAmt),
     holdBeats: oneOf(v.holdBeats, HOLD_BEATS, d.holdBeats),
     morphBeats: oneOf(v.morphBeats, MORPH_BEATS, d.morphBeats),
-    spin: bool(v.spin, d.spin),
   };
 }
 

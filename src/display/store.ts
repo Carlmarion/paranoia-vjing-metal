@@ -133,7 +133,7 @@ function setOption(model: Model, key: unknown, value: unknown): Model {
   let v: LookOptions[keyof LookOptions] | undefined;
   switch (key) {
     case 'meltMode': if (MELT_MODES.includes(value as never)) v = value as LookOptions['meltMode']; break;
-    case 'mirrorX': case 'mirrorY': case 'spin': if (typeof value === 'boolean') v = value; break;
+    case 'mirrorX': case 'mirrorY': if (typeof value === 'boolean') v = value; break;
     case 'hueJumpEvery': if (HUE_JUMP_EVERY.includes(value as never)) v = value as LookOptions['hueJumpEvery']; break;
     case 'hueJumpAmt': if (isNum(value)) v = clamp(value, HUE_JUMP_AMT_RANGE[0], HUE_JUMP_AMT_RANGE[1]); break;
     case 'holdBeats': if (HOLD_BEATS.includes(value as never)) v = value as LookOptions['holdBeats']; break;
