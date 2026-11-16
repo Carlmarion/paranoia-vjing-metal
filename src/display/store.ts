@@ -1,7 +1,7 @@
 // B9 — the Display's state owner. `reduce` is a pure reducer (Model, message) → Model; effects that
 // belong to other subsystems (sequencer commands, input restart, state broadcast) are returned, not run.
 import { GROUPS, PARAMS, type Group, type ParamId } from '../shared/params';
-import type { ControlMsg } from '../shared/protocol';
+import type { ControlMsg, LiveMsg, ShapeMsg } from '../shared/protocol';
 import {
   BANDS, CALIB_RANGES, HOLD_BEATS, HUE_JUMP_AMT_RANGE, HUE_JUMP_EVERY, MELT_MODES, MORPH_BEATS, ORDERS,
   PRESET_CYCLE_MIN, PRESET_SLOTS, REACT_RANGE, SESSION_RANGES, STORAGE_KEYS, THR_RANGE,
@@ -25,15 +25,31 @@ export interface Model {
   currentPreset: number | null;
 }
 
+/** Synchronous lookups into the shape library (B12.3), so the reducer stays pure. */
+export interface ShapeLookup {
+  /** The layer holds a shape (baked or drawn). */
+  isShape(layer: number): boolean;
+  /** The layer of a drawn shape's key, or null (unknown key, or a baked shape). */
+  drawnLayer(key: unknown): number | null;
+}
+
 export interface Env {
   /** The presets PRNG stream: streamRng(seed, 'presets'). */
   rng: Rng;
   nowMs: number;
-  motifCount: number;
+  shapes: ShapeLookup;
 }
+
+/** Display-internal results from library.ts (never sent by the Control). */
+export type InternalMsg =
+  | { t: 'liveDone'; layer: number } // the live drawing is saved and its layer holds the live picture
+  | { t: 'liveAbort' } // live ended with nothing to keep
+  | { t: 'shapeGone'; layer: number }; // a shape was deleted
 
 export type Effect =
   | { t: 'seq'; cmd: SeqCommand } // forward to sequencer.command()
+  | { t: 'seqForget'; layer: number } // sequencer.forget()
+  | { t: 'library'; msg: ShapeMsg | LiveMsg } // library.handle()
   | { t: 'sendState' } // reply to hello with a state message now
   | { t: 'restartInput' }; // calib.deviceId changed
 
@@ -158,7 +174,7 @@ function setSession(model: Model, key: unknown, value: unknown, env: Env): Model
     case 'presetCycleMin': if (PRESET_CYCLE_MIN.includes(value as never)) v = value as Session['presetCycleMin']; break;
     case 'queued':
       if (value === null) v = null;
-      else if (isNum(value) && Number.isInteger(value) && value >= 0 && value < env.motifCount) v = value;
+      else if (isNum(value) && Number.isInteger(value) && env.shapes.isShape(value)) v = value;
       break;
   }
   if (v === undefined) return model;
@@ -187,8 +203,17 @@ function cmd(model: Model, name: unknown, arg: unknown, env: Env): Result {
     case 'next': case 'prev': case 'random':
       return { model, effects: [{ t: 'seq', cmd: { name } }] };
     case 'goto':
-      if (!isNum(arg) || !Number.isInteger(arg) || arg < 0 || arg >= env.motifCount) return none();
+      if (!isNum(arg) || !Number.isInteger(arg) || !env.shapes.isShape(arg)) return none();
       return { model, effects: [{ t: 'seq', cmd: { name: 'goto', index: arg } }] };
+    case 'replay': {
+      const layer = env.shapes.drawnLayer(arg);
+      if (layer === null || s.session.live) return none();
+      const fromBlank = s.session.blackout; // B7.6: the drawing appears on black
+      return {
+        model: patchSession(model, { meltHold: false, blackout: false }),
+        effects: [{ t: 'seq', cmd: { name: 'replay', layer, fromBlank } }],
+      };
+    }
     case 'queue':
       return none(setSession(model, 'queued', arg ?? null, env));
     case 'randomize':
@@ -229,13 +254,52 @@ function cmd(model: Model, name: unknown, arg: unknown, env: Env): Result {
   }
 }
 
+const SHAPE_MSGS = new Set(['shapeSave', 'shapeDelete', 'shapeRename', 'shapeEnable', 'shapeDuplicate', 'shapeGet', 'shapesImport']);
+
+/** B12.5 live mode: the store owns `session.live`; library.ts owns the live layer. */
+function live(model: Model, m: Record<string, unknown>): Result {
+  const isLive = model.state.session.live;
+  const lib = (msg: unknown): Effect => ({ t: 'library', msg: msg as LiveMsg });
+  switch (m.t) {
+    case 'live':
+      if (m.on === true && !isLive) {
+        return {
+          model: patchSession(model, { live: true, meltHold: false }),
+          effects: [lib(m), { t: 'seq', cmd: { name: 'live', on: true } }],
+        };
+      }
+      if (m.on === false && isLive) {
+        return { model: patchSession(model, { live: false }), effects: [lib(m), { t: 'seq', cmd: { name: 'live', on: false } }] };
+      }
+      return { model, effects: [] };
+    case 'liveStrokes':
+      return { model, effects: isLive ? [lib(m)] : [] };
+    case 'liveFinish': {
+      if (isLive) return { model, effects: [lib(m)] };
+      // live already ended (safety net): keep the drawing as a plain save
+      const save = { t: 'shapeSave', ...(m.id !== undefined ? { id: m.id } : {}), name: m.name, strokes: m.strokes };
+      return { model, effects: [{ t: 'library', msg: save as ShapeMsg }] };
+    }
+    case 'liveDone':
+      if (!isNum(m.layer)) return { model, effects: [] };
+      return {
+        model: patchSession(model, { live: false, autoAdvance: false }), // the flow is restarted by hand
+        effects: [{ t: 'seq', cmd: { name: 'finish', layer: m.layer } }],
+      };
+    case 'liveAbort':
+      return { model: patchSession(model, { live: false }), effects: [{ t: 'seq', cmd: { name: 'live', on: false } }] };
+    default:
+      return { model, effects: [] };
+  }
+}
+
 /**
- * Applies one Control → Display message. Unknown or malformed messages return the same Model (by reference),
+ * Applies one Control → Display message (or a Display-internal one, `InternalMsg`). Unknown or malformed messages return the same Model (by reference),
  * so `next.model !== model` means "state or fade changed".
  */
 export function reduce(model: Model, msg: unknown, env: Env): Result {
   if (!msg || typeof msg !== 'object') return { model, effects: [] };
-  const m = msg as Partial<ControlMsg> & Record<string, unknown>;
+  const m = msg as Partial<ControlMsg | InternalMsg> & Record<string, unknown>;
   switch (m.t) {
     case 'hello': return { model, effects: [{ t: 'sendState' }] };
     case 'setParam': return { model: setParam(model, m.id, m.field, m.value), effects: [] };
@@ -243,7 +307,15 @@ export function reduce(model: Model, msg: unknown, env: Env): Result {
     case 'setSession': return { model: setSession(model, m.key, m.value, env), effects: [] };
     case 'setCalib': return setCalib(model, m.key, m.value);
     case 'cmd': return cmd(model, m.name, m.arg, env);
-    default: return { model, effects: [] };
+    case 'live': case 'liveStrokes': case 'liveFinish': case 'liveDone': case 'liveAbort': return live(model, m);
+    case 'shapeGone': {
+      if (!isNum(m.layer)) return { model, effects: [] };
+      const q = model.state.session.queued === m.layer ? patchSession(model, { queued: null }) : model;
+      return { model: q, effects: [{ t: 'seqForget', layer: m.layer }] };
+    }
+    default:
+      if (typeof m.t === 'string' && SHAPE_MSGS.has(m.t)) return { model, effects: [{ t: 'library', msg: m as ShapeMsg }] };
+      return { model, effects: [] };
   }
 }
 

@@ -10,7 +10,11 @@ import {
 import { mulberry32 } from '../src/shared/math';
 
 const NOW = new Date(2026, 10, 19, 22, 0, 0).getTime();
-const env = (): Env => ({ rng: mulberry32(1), nowMs: NOW, motifCount: 12 });
+/** 12 baked shapes (layers 0–11) and one drawn shape `drawn:abc` on layer 12. */
+const env = (): Env => ({
+  rng: mulberry32(1), nowMs: NOW,
+  shapes: { isShape: (l) => Number.isInteger(l) && l >= 0 && l <= 12, drawnLayer: (k) => (k === 'drawn:abc' ? 12 : null) },
+});
 
 class MemStorage implements StorageLike {
   data = new Map<string, string>();
@@ -126,7 +130,7 @@ describe('messages', () => {
       { t: 'setParam', id: 'zoom', field: 'lock', value: 1 },
       { t: 'setOption', key: 'meltMode', value: 3 }, { t: 'setOption', key: 'nope', value: 1 },
       { t: 'setOption', key: 'holdBeats', value: 33 }, { t: 'setSession', key: 'nope', value: 1 },
-      { t: 'setSession', key: 'presetCycleMin', value: 3 }, { t: 'setSession', key: 'queued', value: 12 },
+      { t: 'setSession', key: 'presetCycleMin', value: 3 }, { t: 'setSession', key: 'queued', value: 13 },
       { t: 'setSession', key: 'order', value: 'shuffle' }, { t: 'setCalib', key: 'nope', value: 1 },
       { t: 'setCalib', key: 'onsetK', value: NaN }, { t: 'setCalib', key: 'deviceId', value: 5 },
       { t: 'cmd', name: 'explode' }, { t: 'cmd', name: 'goto', arg: 99 }, { t: 'cmd', name: 'loadPreset', arg: 3 },
@@ -169,7 +173,7 @@ describe('messages', () => {
       { t: 'setSession', key: 'holdPos', value: -1 }, { t: 'setSession', key: 'queued', value: 4 });
     expect(m.state.session).toEqual({
       autopilot: 1, reactMaster: 1.5, xfade: 8, autoAdvance: false, order: 'sequential', presetCycleMin: 5,
-      frozen: true, fallback: true, blackout: true, meltHold: true, holdPos: 0, queued: 4,
+      frozen: true, fallback: true, blackout: true, meltHold: true, holdPos: 0, queued: 4, live: false,
     });
     expect(apply(m, { t: 'setSession', key: 'queued', value: null }).state.session.queued).toBeNull();
   });
@@ -272,5 +276,84 @@ describe('display-side writes', () => {
     expect(renderLook(m).params.zoom.react).toBe(0.06);
     expect(renderLook(m).params.glow.react).toBe(0);
     expect(m.state.look).not.toEqual(fallbackLook());
+  });
+});
+
+describe('shapes and live (B12)', () => {
+  const strokes = [{ pts: new Float32Array([0, 0, 0.1, 0.1]), erase: false, group: 1 }];
+
+  test('shape messages go to the library unchanged; the Model does not change', () => {
+    const m = fresh();
+    for (const msg of [
+      { t: 'shapeSave', name: 'a', strokes }, { t: 'shapeDelete', id: 'abc' }, { t: 'shapeRename', id: 'abc', name: 'b' },
+      { t: 'shapeEnable', key: 'baked:3', enabled: false }, { t: 'shapeDuplicate', id: 'abc' }, { t: 'shapeGet', id: 'abc' },
+      { t: 'shapesImport', shapes: [] },
+    ]) {
+      const r = reduce(m, msg, env());
+      expect(r.model).toBe(m);
+      expect(r.effects).toEqual([{ t: 'library', msg }]);
+    }
+  });
+
+  test('live on: session.live, melt hold released, library and sequencer told; a second on is ignored', () => {
+    const m = apply(fresh(), { t: 'setSession', key: 'meltHold', value: true });
+    const msg = { t: 'live', on: true, strokes };
+    const r = reduce(m, msg, env());
+    expect(r.model.state.session.live).toBe(true);
+    expect(r.model.state.session.meltHold).toBe(false);
+    expect(r.effects).toEqual([{ t: 'library', msg }, { t: 'seq', cmd: { name: 'live', on: true } }]);
+    expect(reduce(r.model, msg, env()).effects).toEqual([]);
+  });
+
+  test('liveStrokes and liveFinish reach the library only while live; a late finish is a plain save', () => {
+    const live = apply(fresh(), { t: 'live', on: true, strokes });
+    const upd = { t: 'liveStrokes', strokes };
+    expect(reduce(live, upd, env()).effects).toEqual([{ t: 'library', msg: upd }]);
+    expect(reduce(fresh(), upd, env()).effects).toEqual([]);
+    const fin = { t: 'liveFinish', name: 'x', strokes };
+    expect(reduce(live, fin, env()).effects).toEqual([{ t: 'library', msg: fin }]);
+    expect(reduce(fresh(), fin, env()).effects).toEqual([{ t: 'library', msg: { t: 'shapeSave', name: 'x', strokes } }]);
+    expect(reduce(fresh(), { ...fin, id: 'abc' }, env()).effects).toEqual([{ t: 'library', msg: { t: 'shapeSave', id: 'abc', name: 'x', strokes } }]);
+  });
+
+  test('live off melts back; the library finishing or aborting ends live', () => {
+    const live = apply(fresh(), { t: 'live', on: true, strokes });
+    const off = reduce(live, { t: 'live', on: false }, env());
+    expect(off.model.state.session.live).toBe(false);
+    expect(off.effects).toEqual([{ t: 'library', msg: { t: 'live', on: false } }, { t: 'seq', cmd: { name: 'live', on: false } }]);
+    expect(reduce(fresh(), { t: 'live', on: false }, env()).effects).toEqual([]);
+    const done = reduce(live, { t: 'liveDone', layer: 12 }, env());
+    expect(done.model.state.session.live).toBe(false);
+    expect(done.model.state.session.autoAdvance).toBe(false);
+    expect(done.effects).toEqual([{ t: 'seq', cmd: { name: 'finish', layer: 12 } }]);
+    const abort = reduce(live, { t: 'liveAbort' }, env());
+    expect(abort.model.state.session.live).toBe(false);
+    expect(abort.model.state.session.autoAdvance).toBe(true);
+    expect(abort.effects).toEqual([{ t: 'seq', cmd: { name: 'live', on: false } }]);
+  });
+
+  test('replay: drawn shapes only, not while live; releases melt hold, and blackout into a melt from blank', () => {
+    const m = fresh();
+    expect(reduce(m, { t: 'cmd', name: 'replay', arg: 'baked:3' }, env()).effects).toEqual([]);
+    expect(reduce(apply(m, { t: 'live', on: true, strokes }), { t: 'cmd', name: 'replay', arg: 'drawn:abc' }, env()).effects).toEqual([]);
+    const r = reduce(apply(m, { t: 'setSession', key: 'meltHold', value: true }), { t: 'cmd', name: 'replay', arg: 'drawn:abc' }, env());
+    expect(r.effects).toEqual([{ t: 'seq', cmd: { name: 'replay', layer: 12, fromBlank: false } }]);
+    expect(r.model.state.session.meltHold).toBe(false);
+    const b = reduce(apply(m, { t: 'setSession', key: 'blackout', value: true }), { t: 'cmd', name: 'replay', arg: 'drawn:abc' }, env());
+    expect(b.effects).toEqual([{ t: 'seq', cmd: { name: 'replay', layer: 12, fromBlank: true } }]);
+    expect(b.model.state.session.blackout).toBe(false);
+    expect(b.model.state.session.autoAdvance).toBe(true);
+  });
+
+  test('goto and queue reach every shape; a deleted shape leaves queued and the sequencer', () => {
+    const m = fresh();
+    expect(reduce(m, { t: 'cmd', name: 'goto', arg: 12 }, env()).effects).toEqual([{ t: 'seq', cmd: { name: 'goto', index: 12 } }]);
+    expect(reduce(m, { t: 'cmd', name: 'goto', arg: 13 }, env()).effects).toEqual([]);
+    const q = apply(m, { t: 'cmd', name: 'queue', arg: 12 });
+    expect(q.state.session.queued).toBe(12);
+    const gone = reduce(q, { t: 'shapeGone', layer: 12 }, env());
+    expect(gone.model.state.session.queued).toBeNull();
+    expect(gone.effects).toEqual([{ t: 'seqForget', layer: 12 }]);
+    expect(reduce(q, { t: 'shapeGone', layer: 3 }, env()).model.state.session.queued).toBe(12);
   });
 });

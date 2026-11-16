@@ -41,6 +41,8 @@ export interface Session {
   meltHold: boolean;
   holdPos: number; // 0…1
   queued: number | null;
+  /** The live layer is on the projector (B12.5). Never persisted. */
+  live: boolean;
 }
 
 /** Venue-dependent. Never stored in presets. */
@@ -117,7 +119,7 @@ export function fallbackLook(): Look {
 export function defaultSession(): Session {
   return {
     autopilot: 0.5, reactMaster: 1, xfade: 3, autoAdvance: true, order: 'random', presetCycleMin: 0,
-    frozen: false, fallback: false, blackout: false, meltHold: false, holdPos: 0, queued: null,
+    frozen: false, fallback: false, blackout: false, meltHold: false, holdPos: 0, queued: null, live: false,
   };
 }
 
@@ -235,7 +237,9 @@ export function parseJson(text: string | null): unknown {
 
 // ---------- safe storage ----------
 
-export const STORAGE_KEYS = { presets: 'ferro.presets.v1', calib: 'ferro.calib.v1', look: 'ferro.look.v1' } as const;
+export const STORAGE_KEYS = {
+  presets: 'ferro.presets.v1', calib: 'ferro.calib.v1', look: 'ferro.look.v1', pool: 'ferro.pool.v1',
+} as const;
 
 /** The subset of `Storage` we use, injectable for tests. */
 export interface StorageLike { getItem(key: string): string | null; setItem(key: string, value: string): void; }
