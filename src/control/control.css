@@ -88,6 +88,9 @@ input[type=checkbox] { accent-color: var(--accent); width: 14px; height: 14px; m
 .stat { font-variant-numeric: tabular-nums; min-width: 52px; }
 .mgroup { display: inline-flex; align-items: center; gap: 5px; }
 .mlbl { color: var(--dim); font-size: 10px; }
+.livebadge { display: none; font-weight: 700; letter-spacing: .1em; color: #ff3b30; }
+.livebadge.on { display: inline; animation: blink 1s steps(2, start) infinite; }
+@keyframes blink { to { visibility: hidden; } }
 
 /* ---------- columns ---------- */
 .cols { flex: 1; min-height: 0; display: grid; grid-template-columns: 290px minmax(0, 1fr) 320px; }
@@ -97,8 +100,9 @@ input[type=checkbox] { accent-color: var(--accent); width: 14px; height: 14px; m
 .col.right { border-left: 1px solid var(--line); }
 body.nostate .cols { opacity: .35; pointer-events: none; }
 
-/* thumbnails */
-.thumbs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 6px; }
+/* thumbnails: the whole library, scrolling inside the column (B10) */
+.shead { display: flex; align-items: baseline; gap: 8px; }
+.thumbs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 6px; max-height: 42vh; overflow-y: auto; padding-right: 2px; }
 .thumb { position: relative; aspect-ratio: 1; background: #000; border: 2px solid transparent; border-radius: 3px; cursor: pointer; overflow: hidden; }
 .thumb img { width: 100%; height: 100%; object-fit: contain; display: block; opacity: .75; pointer-events: none; }
 .thumb .tnum { position: absolute; left: 3px; top: 1px; font-size: 9px; color: var(--dim); }
@@ -107,6 +111,16 @@ body.nostate .cols { opacity: .35; pointer-events: none; }
 .thumb.b { border: 2px solid var(--accent); }
 .thumb.a { border: 2px solid #d6d6dc; }
 .thumb.a img, .thumb.b img { opacity: 1; }
+.thumb.off img { opacity: .25; }
+.thumb .tnum { max-width: calc(100% - 22px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thumb .pool { position: absolute; right: 3px; top: 3px; width: 12px; height: 12px; }
+.ttools { position: absolute; left: 0; right: 0; bottom: 0; display: none; justify-content: space-between; background: #000c; }
+.thumb:hover .ttools { display: flex; }
+.btn.tbtn { height: 18px; padding: 0 3px; border: 0; background: transparent; font-size: 11px; }
+.btn.tbtn:disabled { opacity: .3; cursor: default; }
+.btn.tbtn.danger:hover { color: #e0574c; }
+.btn:disabled { opacity: .4; cursor: default; }
+.btn.drawbtn { border-color: #3a2a1a; color: var(--accent); }
 
 /* param panels */
 .panel { border: 1px solid var(--line); border-radius: 4px; background: var(--panel); padding: 0 10px 4px; margin: 8px 0; }
@@ -141,3 +155,29 @@ body.nostate .cols { opacity: .35; pointer-events: none; }
 .raw .num { flex: 0 0 auto; }
 .col.right .row > .lbl { flex-basis: 96px; }
 .col.right .row.rawrow > .lbl { flex-basis: 48px; }
+
+/* ---------- drawing modal (B12.1) ---------- */
+.draw {
+  position: fixed; inset: 0; z-index: 20; display: none; flex-direction: column;
+  background: #050507f5; color: var(--text);
+}
+.draw.open { display: flex; }
+.dtop, .dbottom { display: flex; align-items: center; gap: 8px; padding: 8px 12px; flex: 0 0 auto; flex-wrap: wrap; }
+.dtop { border-bottom: 1px solid var(--line); }
+.dbottom { border-top: 1px solid var(--line); min-height: 34px; }
+.dname { width: 180px; }
+.dsym, .dtools { flex: 0 0 auto; }
+.dsym .btn { min-width: 34px; }
+.dghost { max-width: 160px; }
+.dmid { flex: 1; min-height: 0; display: flex; gap: 12px; padding: 12px; }
+.dstage { flex: 1; min-width: 0; min-height: 0; display: flex; align-items: center; justify-content: center; }
+.dcanvas { display: block; background: #000; cursor: crosshair; touch-action: none; border: 1px solid var(--line); }
+.dside { flex: 0 0 150px; display: flex; flex-direction: column; gap: 10px; }
+.dside .btn { height: 34px; }
+.btn.dlive { display: flex; align-items: center; justify-content: center; gap: 8px; font-weight: 700; letter-spacing: .1em; }
+.dlive .dot { width: 12px; height: 12px; border-radius: 50%; background: #3a1512; }
+.btn.dlive.on { border-color: #ff3b30; color: #ff3b30; background: #200a08; }
+.dlive.on .dot { background: #ff3b30; box-shadow: 0 0 10px #ff3b30; animation: blink 1s steps(2, start) infinite; }
+.draw.live .dcanvas { border-color: #ff3b30; }
+.btn.dsave { border-color: var(--accent); color: var(--accent); }
+.dwarn { color: #d9a441; }

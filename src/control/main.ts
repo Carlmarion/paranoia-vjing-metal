@@ -10,11 +10,12 @@ import {
 } from '../shared/state';
 import { bandValue, createBroadcastTransport, type ControlMsg, type StateMsg, type MetersMsg } from '../shared/protocol';
 import { keyAction, isTyping } from '../shared/keys';
-import { h, button, lin, row, fmt, Slider, Seg, Meter, type Mapping } from './ui';
+import { h, button, lin, row, fmt, fileStamp, download, Slider, Seg, Meter, type Mapping } from './ui';
+import { ShapesColumn } from './shapes';
+import { DrawModal, type DrawDoc } from './draw';
 
 const OFFLINE_AFTER_MS = 1000;
 const HELLO_EVERY_MS = 1000;
-const CLICK_DELAY_MS = 250; // single click (queue) waits this long so a double-click (goto) can cancel it
 const LEVEL_FLOOR_DB = -60;
 
 // ---------- transport ----------
@@ -104,43 +105,25 @@ for (const b of ['low', 'mid', 'high', 'energy'] as const) {
 const beatLed = h('span', 'led beat', undefined, top);
 const bpmEl = h('span', 'stat', '— bpm', top);
 h('span', 'spacer', undefined, top);
+const liveBadge = h('span', 'livebadge', 'LIVE', top);
 const freezeBtn = toggleBtn('Freeze', () => toggleSession('frozen'), top);
 const fallbackBtn = toggleBtn('Fallback', () => toggleSession('fallback'), top);
 const blackoutBtn = toggleBtn('Blackout', () => toggleSession('blackout'), top, 'danger');
 
 // ---------- left: shapes ----------
 
-h('h2', '', 'Shapes', left);
-const thumbGrid = h('div', 'thumbs', undefined, left);
-let thumbs: HTMLDivElement[] = [];
-let clickTimer = 0;
+const shapes = new ShapesColumn(left, { send, cmd, openDraw });
+const draw = new DrawModal({
+  send,
+  client: shapes.client,
+  manifest: () => last?.manifest ?? null,
+  currentLayer: () => meters?.motifA ?? 0,
+});
 
-function buildThumbs(count: number): void {
-  thumbGrid.replaceChildren();
-  thumbs = [];
-  for (let i = 0; i < count; i++) {
-    const t = h('div', 'thumb', undefined, thumbGrid);
-    const img = h('img', '', undefined, t);
-    img.src = `${import.meta.env.BASE_URL}sdf/thumbs/${String(i + 1).padStart(2, '0')}.png`;
-    img.alt = String(i + 1);
-    img.draggable = false;
-    h('span', 'tnum', String(i + 1), t);
-    t.addEventListener('click', () => {
-      window.clearTimeout(clickTimer);
-      clickTimer = window.setTimeout(() => cmd('queue', i), CLICK_DELAY_MS);
-    });
-    t.addEventListener('dblclick', () => {
-      window.clearTimeout(clickTimer);
-      cmd('goto', i);
-    });
-    thumbs.push(t);
-  }
+function openDraw(doc: DrawDoc): void {
+  closeMenu();
+  draw.open(doc);
 }
-
-const navRow = h('div', 'btnrow', undefined, left);
-button('Prev', () => cmd('prev'), navRow);
-button('Next', () => cmd('next'), navRow);
-button('Random', () => cmd('random'), navRow);
 
 const morphRow = row('morph', left);
 const morphBar = new Meter('morph', morphRow);
@@ -342,15 +325,8 @@ fileInput.addEventListener('change', () => {
 
 function exportPresets(): void {
   if (!last) { fileMsg.textContent = 'no state yet'; return; }
-  const d = new Date();
-  const p2 = (n: number): string => String(n).padStart(2, '0');
-  const name = `ferro-presets-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}.json`;
-  const url = URL.createObjectURL(new Blob([serialisePresets(last.state.presets)], { type: 'application/json' }));
-  const a = h('a');
-  a.href = url;
-  a.download = name;
-  a.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  const name = `ferro-presets-${fileStamp()}.json`;
+  download(name, new Blob([serialisePresets(last.state.presets)], { type: 'application/json' }));
   fileMsg.textContent = name;
 }
 
@@ -428,9 +404,8 @@ function applyState(msg: StateMsg): void {
   });
 
   applyCalib(c, msg.devices);
-
-  const count = msg.manifest?.count ?? 0;
-  if (count !== thumbs.length) buildThumbs(count);
+  liveBadge.classList.toggle('on', session.live);
+  draw.onSessionLive(session.live);
 }
 
 function applyCalib(c: Calib, devices: StateMsg['devices']): void {
@@ -445,6 +420,8 @@ function applyCalib(c: Calib, devices: StateMsg['devices']): void {
   if (document.activeElement !== devSel) devSel.value = c.deviceId ?? '';
   for (const k of Object.keys(calibSliders) as CalibNum[]) calibSliders[k].set(c[k]);
 }
+
+let lastMotifA = -1;
 
 function applyMeters(m: MetersMsg): void {
   const a = m.audio;
@@ -465,13 +442,8 @@ function applyMeters(m: MetersMsg): void {
     r.thr.setBar(thrMap.toU(bandValue(rowBands[i], a)));
   }
 
-  const queued = last?.state.session.queued ?? null;
-  for (let i = 0; i < thumbs.length; i++) {
-    const cl = thumbs[i].classList;
-    cl.toggle('a', i === m.motifA);
-    cl.toggle('b', i === m.motifB && m.motifB !== m.motifA);
-    cl.toggle('q', i === queued);
-  }
+  shapes.mark(m.motifA, m.motifB, last?.state.session.queued ?? null);
+  if (m.motifA !== lastMotifA) { lastMotifA = m.motifA; draw.onCurrent(); }
   morphBar.set(m.morphT);
   holdEl.textContent = m.holdRemaining > 0 ? `hold ${Math.ceil(m.holdRemaining)}` : m.morphT > 0 ? 'morphing' : '—';
 
@@ -488,6 +460,14 @@ transport.onMessage((msg) => {
     meters = msg;
     metersDirty = true;
     lastMetersAt = performance.now();
+  } else if (msg.t === 'library') {
+    shapes.onLibrary(msg);
+    draw.onLibrary();
+  } else if (msg.t === 'shapeStrokes') {
+    shapes.onStrokes(msg);
+  } else if (msg.t === 'shapeError') {
+    shapes.onError(msg.text);
+    draw.onError(msg.text);
   }
 });
 
@@ -511,7 +491,10 @@ function frame(): void {
 requestAnimationFrame(frame);
 
 window.addEventListener('keydown', (e) => {
-  if (isTyping(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (draw.isOpen) { if (draw.key(e)) e.preventDefault(); return; } // the modal's keys only (B10)
+  if (isTyping(e.target)) return;
+  if (e.key === 'p' || e.key === 'P') { e.preventDefault(); shapes.openNew(); return; }
   const a = keyAction(e.key, last?.state.session ?? null);
   if (a?.kind !== 'msg') return;
   e.preventDefault();

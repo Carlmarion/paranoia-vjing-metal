@@ -100,17 +100,21 @@ ferro/
       autopilot.ts      drift time, hue jumps, preset cycle
       presets.ts        store, crossfade, randomize, mutate, undo
       store.ts          owns State; applies messages; broadcasts
-      library.ts        shape library: IndexedDB, layer slots, bake queue, live layer
+      library.ts        shape library: layer slots, pool, live layer, replay (IndexedDB, workers, GL injected)
       bake.worker.ts    Web Worker: raster + sdf off the main thread
+      baker.ts          worker-backed bake queue (latest request per key wins)
+      shapedb.ts        IndexedDB store of drawn shapes
       debug.ts          on-screen overlay
     control/
       main.ts           boot, transport, render loop
       ui.ts             DOM builders
       draw.ts           the drawing modal (B12)
+      shapes.ts         the shapes grid (tiles, pool checkboxes, tile tools)
+      shapeclient.ts    the Control's view of the library: stroke requests, baked ghosts, PNG export
       control.css
   tests/
     dsp.test.ts  modulation.test.ts  sequencer.test.ts  presets.test.ts  store.test.ts
-    strokes.test.ts  sdf.test.ts  library.test.ts
+    strokes.test.ts  sdf.test.ts  raster.test.ts  library.test.ts
 ```
 
 ## B2. Motif assets
@@ -471,7 +475,7 @@ The live layer (`LIVE = MAX_LAYERS − 1`) is a motif like any other for the sha
 { t: 'shapeSave', id?: string, name: string, strokes: Stroke[] }    // no id = new shape; id = update in place
 { t: 'shapeDelete', id }  { t: 'shapeRename', id, name }  { t: 'shapeEnable', key: ShapeKey, enabled }
 { t: 'shapeDuplicate', id }  { t: 'shapeGet', id }                   // → shapeStrokes
-{ t: 'shapesImport', shapes: DrawnShape[] }
+{ t: 'shapesImport', shapes: unknown }                            // the parsed export file; the Display validates it
 { t: 'live', on: boolean, strokes: Stroke[] }                       // enter / leave live mode
 { t: 'liveStrokes', strokes: Stroke[] }                             // full list, ≤ 10×/s, and ≥ 1×/s while live (heartbeat)
 { t: 'liveFinish', id?: string, name: string, strokes: Stroke[] }   // save (new or update) and keep it on screen
@@ -480,8 +484,10 @@ The live layer (`LIVE = MAX_LAYERS − 1`) is a motif like any other for the sha
 { t: 'state', state: State, manifest, devices }                    // on hello, and ≤ 10×/s after changes
 { t: 'meters', audio: AudioFrame, values: number[31],              // effective param values, normalised
   motifA, motifB, morphT, holdRemaining, fps, error?: string }     // 20×/s; doubles as heartbeat
-{ t: 'library', version: number, shapes: ShapeMeta[], free: number } // on hello and whenever the library changes; free = empty slots
-{ t: 'shapeStrokes', id, strokes: Stroke[] }                       // answer to shapeGet, and after shapeDuplicate (the copy)
+{ t: 'library', version: number, shapes: ShapeMeta[], free: number, persistent: boolean }
+                         // on hello and whenever the library changes; free = empty slots; persistent = false without IndexedDB
+{ t: 'shapeStrokes', id, name, strokes: Stroke[], duplicateOf?: string }
+                         // answer to shapeGet; after shapeDuplicate, `id` is the copy and `duplicateOf` the original
 { t: 'shapeError', text }                                          // e.g. "library full", "shape too big"
 ```
 Strokes travel as structured clones (`Float32Array` inside), never as JSON.
@@ -494,8 +500,8 @@ Dark, low-luminance UI (the laptop must not light the room): background `#0b0b0d
 **Top bar:** connection status (`DISPLAY OFFLINE` in red if no `meters` for 1 s) · fps · input level meter with clip LED · low, mid, high, energy meters · beat LED · BPM · buttons Freeze, Fallback, Blackout.
 
 **Left column: shapes**
-- Thumbnail grid of the whole library (B12.3), baked shapes first, then drawn shapes in creation order; the grid scrolls inside the column, it never grows the page. Current A = solid outline, morph target B = accent outline, queued = dashed, live layer (when live) = red outline.
-- Each tile: a checkbox (the pool, B12.3; on by default) and, on hover, the name and small buttons: drawn shapes get **edit**, **duplicate**, **draw in** (replay, B7.6) and **delete** (asks "Delete <name>?" first); baked shapes get none.
+- Thumbnail grid of the whole library (B12.3), baked shapes first, then drawn shapes in creation order; the grid scrolls inside the column, it never grows the page. Current A = solid outline, morph target B = accent outline, queued = dashed. While live, the top bar shows a blinking red `LIVE`.
+- Each tile: a checkbox (the pool, B12.3; on by default; unchecked tiles are dimmed) and, on hover, small buttons: drawn shapes get **edit**, **duplicate**, **draw in** (replay, B7.6), **PNG** (B12.7) and **delete** (asks "Delete <name>?" first); baked shapes get none.
 - Click = queue. Double-click = go now. Buttons Prev, Next, Random, **Draw** (opens the drawing modal, B12.1; key P).
 - Export shapes / Import shapes (B12.7), and "N free" (slots left).
 - Morph progress bar and beats remaining in the hold.
@@ -567,7 +573,7 @@ The drawing tool lives in the Control (`src/control/draw.ts`) as a **modal over 
 A faint (25% grey) rendering of another shape under the ink, as a tracing guide for drawing the next shape on top of the previous one. Choices: **current** (default: the shape on the projector, A), **none**, or any library shape. While live, **current** stays frozen on the shape that was A when LIVE went on (`liveFrom`), and follows A again when LIVE goes off. For a drawn shape the Control asks the Display for its strokes (`shapeGet`) and rasterises them with `raster.ts`; for a baked shape the Control fetches `sdf/atlas.bin` once (lazily, the first time a baked ghost is chosen) and draws the mask `d ≤ 0` of that layer. The ghost is never part of the drawing.
 
 ### B12.3 Library (`library.ts`)
-- The library = the baked shapes (manifest, layers `0 … count−1`) + the drawn shapes (IndexedDB), in that order. `free = MAX_LAYERS − 1 − count − drawnCount`.
+- The library = the baked shapes (manifest, layers `0 … count−1`) + the drawn shapes (IndexedDB), in that order. `free = MAX_LAYERS − 1 − count − drawnCount − dying`, where `dying` counts layers of deleted shapes not yet cleared (below).
 - A drawn shape gets the lowest free layer when saved; the layer is released on delete. Layers of existing shapes never change while the Display runs. Keys (`baked:3`, `drawn:<id>`) are the stable identity; layers are for the shader and the sequencer only.
 - `shapeSave` with an `id` re-bakes into the same layer. If that shape is on screen the picture updates on upload; that is intended.
 - `shapeDelete` of the shape on screen: the layer is cleared to blank after the next morph away from it; until then it stays visible. A deleted shape is removed from the pool and the history immediately.
@@ -594,7 +600,7 @@ Same result as `tools/bake_sdf.py` (B2.2), computed in a Web Worker so the proje
 - Every effect, mirror, melt mode and the autopilot apply to the live layer exactly as to any motif. `session.live` is shown in the top bar of the dashboard (`LIVE` in red) and the debug overlay.
 
 ### B12.6 Replay (draw in)
-`cmd replay` with a drawn shape's key: `library.ts` plays the shape's strokes back in drawing order at constant ink speed over `morphBeats × beatPeriod` (the sequencer's clock, B7.6): at progress `q` the live layer holds the prefix of the total path length `q × L` (`strokes.ts` slices a stroke list at a path length; eraser strokes count in the path like ink). Re-bake at most 10×/s. Meanwhile the sequencer melts A into the growing live layer, so the old shape fuses with the appearing lines; on black (blackout released, B7.6) the drawing simply appears. At `q = 1` the sequencer finishes onto the shape's own layer. Replay of a shape with no strokes (baked) is impossible and the button is absent.
+`cmd replay` with a drawn shape's key: `library.ts` plays the shape's strokes back in drawing order at constant ink speed over `morphBeats × beatPeriod` (the sequencer's clock, B7.6): at progress `q` the live layer holds the prefix of the total path length `q × L` (`strokes.ts` slices a stroke list at a path length; eraser strokes count in the path like ink). The copies of one symmetry group grow together, as they were drawn: a group counts once in `L`, with the length of its longest copy. Re-bake at most 10×/s. Meanwhile the sequencer melts A into the growing live layer, so the old shape fuses with the appearing lines; on black (blackout released, B7.6) the drawing simply appears. At `q = 1` the sequencer finishes onto the shape's own layer. Replay of a shape with no strokes (baked) is impossible and the button is absent.
 
 ### B12.7 Export and import
 - **Export shapes:** downloads `ferro-shapes-YYYYMMDD-HHMM.json` with every `DrawnShape` (`pts` as plain arrays) and the disabled keys. **Import shapes:** validates and adds, new ids, skipping shapes that would not fit.
@@ -630,8 +636,9 @@ Same result as `tools/bake_sdf.py` (B2.2), computed in a Web Worker so the proje
 - **sequencer:** same seed + same beat stream → same motif sequence; no motif repeats within 3 transitions (count ≥ 5); in silence a morph still starts after `holdBeats × 0.5 s`; with `holdBeats` 0, HOLD lasts at most 1 frame; `uMorphT` is continuous: at 60 fps no frame changes it by more than 0.05, including when a command arrives during a morph and when melt hold is entered or left at any position; the eased curve has `uMorphT = 0.5` at `p = 0.5` for every `linger`, zero speed at `p = 0` and `p = 1`, and is strictly increasing; inverting it returns `p` within 1e-4.
 - **presets:** save → export → import round-trip is identical; randomize and mutate never change locked params and never leave rand or min…max ranges; crossfade endpoints are exact; undo restores the previous Look; hue interpolates the short way.
 - **store:** every message type; unknown messages are ignored; a corrupt `localStorage` value falls back to defaults.
-- **strokes:** smoothing keeps a straight raw line straight and never lags the raw point by more than half the sample spacing; a point under R6 gives 6 points at the same radius, 60° apart, one group; X mirror negates x only; coverage of a known disc is within 2% of its area; slicing a path at `q × L` returns a prefix whose length is `q × L` within 1e-6, monotonic in `q`, and the whole list at `q = 1`.
-- **sdf:** on a mask holding one centred disc, the field matches the analytic distance within 1 px everywhere, negative inside; a blank mask gives a constant `+2`; the 2×2 downsample is the mean; float16 round-trip of `|d| ≤ 2` is within 2e-3; the bake of a 20 000-point shape runs in under 60 ms in the test runner.
+- **strokes:** smoothing keeps a straight raw line straight and never lags the raw point by more than one sample spacing; a point under R6 gives 6 points at the same radius, 60° apart, one group; X mirror negates x only; coverage of a known disc is within 2% of its area; slicing a path at `q × L` returns a prefix whose length is `q × L` within 1e-6, monotonic in `q`, and the whole list at `q = 1`; mid-group every copy is cut at the same length.
+- **raster:** `y = +0.8` maps to the top rows; one-point strokes draw a dot; eraser strokes paint `destination-out` in order; ink = alpha ≥ 128.
+- **sdf:** on a mask holding one centred disc, the field matches the analytic distance within 1 px everywhere, negative inside; a blank mask gives a constant `+2`; the 2×2 downsample is the mean; float16 round-trip of `|d| ≤ 2` is within 2e-3; the mask → float16 bake of a 1024² ring runs in under 60 ms in the test runner (the canvas raster step has no Node equivalent and is measured in the browser).
 - **sequencer (B7.6):** `live(true)` melts A → LIVE with the normal timing and `uMorphT` continuity; while live no auto-advance happens and `next/random/goto` are ignored; `live(false)` returns to the previous A; `finish(layer)` after landing sets `A = B = layer`, `uMorphT = 0` with no frame changing the picture, and during the melt into LIVE it speeds the melt up to land within 1 s first; `LIVE` never appears in `history`; the pool: only enabled layers are ever chosen, an empty pool never starts a morph, `goto` outside the pool works; replay progress reaches exactly 1 at `morphBeats × beatPeriod` and then finishes without touching `autoAdvance`.
 - **library:** save assigns the lowest free layer and bumps `version`; delete frees the layer and removes the key from the pool, history and `queued`; a full library refuses a save with `shapeError`; the pool survives a reload; the live safety net finishes after 3 s without `liveStrokes` and does nothing when not live; import skips shapes that don't fit.
 

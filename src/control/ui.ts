@@ -186,6 +186,28 @@ export function row(label: string, parent: HTMLElement, cls = ''): HTMLDivElemen
   return r;
 }
 
+const p2 = (n: number): string => String(n).padStart(2, '0');
+
+/** `YYYYMMDD-HHMM`, for export file names. */
+export function fileStamp(d = new Date()): string {
+  return `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}`;
+}
+
+/** `HH:MM`, for default names. */
+export function clock(d = new Date()): string {
+  return `${p2(d.getHours())}:${p2(d.getMinutes())}`;
+}
+
+/** Hands the browser a file to save. */
+export function download(name: string, blob: Blob): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 export function fmt(v: number): string {
   const a = Math.abs(v);
   return a >= 100 ? v.toFixed(0) : a >= 10 ? v.toFixed(1) : v.toFixed(2);
