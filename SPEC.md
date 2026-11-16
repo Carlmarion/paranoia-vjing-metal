@@ -1,7 +1,7 @@
 # FERRO — live sound-reactive visuals
 
-Spec v2.1, 12 Nov 2026. Supersedes `party-visuals-spec.md`. The repo `paranoia-vjing-metal` is the project root (the `ferro/` folder in B1).
-Show: **Thu 19 Nov 2026**. Feature freeze: **Mon 16 Nov, evening**.
+Spec v2.2, 16 Nov 2026. Supersedes `party-visuals-spec.md`. The repo `paranoia-vjing-metal` is the project root (the `ferro/` folder in B1).
+Show: **Thu 26 Nov 2026**. Feature freeze: **Mon 23 Nov, evening**.
 
 **How to use this file**
 - Parts A–C are for the building agent. Build the whole project in one pass, in the order of section C1, without asking questions. Every decision is already made here; where something is truly unspecified, choose the simplest option and list it in `README.md` under "Decisions".
@@ -13,7 +13,7 @@ Show: **Thu 19 Nov 2026**. Feature freeze: **Mon 16 Nov, evening**.
 
 ## A1. What it is
 
-A browser app that renders 10–12 hand-drawn Lisbon door-ironwork motifs as flat, vivid, glowing line shapes on black, and **melts** continuously from one motif into the next. The in-between shapes of the melt are the main attraction. Sound from the DJ mixer modulates every effect. The piece runs alone for hours; a mouse-driven dashboard on the laptop screen lets Carl push thresholds and amounts, randomize, and save sweet spots as presets during the show.
+A browser app that renders 10–12 hand-drawn Lisbon door-ironwork motifs as flat, vivid, glowing line shapes on black, and **melts** continuously from one motif into the next. The in-between shapes of the melt are the main attraction. Sound from the DJ mixer modulates every effect. New motifs are drawn inside the app with the mouse (B12): saved ones join the shape library, and a live mode draws straight onto the projector. The piece runs alone for hours; a mouse-driven dashboard on the laptop screen lets Carl push thresholds and amounts, randomize, and save sweet spots as presets during the show.
 
 ## A2. Two windows, one machine
 
@@ -43,7 +43,7 @@ They talk over `BroadcastChannel('ferro')` (same origin, same Chrome profile, no
 | Tests | Vitest | Pure logic only |
 | Bake | Python ≥ 3.10 with `numpy`, `scipy`, `Pillow` | In `.venv` |
 | Node | ≥ 20 | — |
-| Drawing | GIMP | 2048×2048 black-on-white PNG |
+| Drawing | The in-app drawing tool (B12), or any editor producing a PNG per B2.1 | — |
 
 `package.json` scripts: `dev`, `build`, `preview`, `test`, `check` (= `tsc --noEmit && vitest run`), `bake` (runs the Python bake on `art/png`, or on `art/placeholders` if `art/png` is empty).
 
@@ -83,6 +83,9 @@ ferro/
       state.ts          types, defaults, serialise, migrate
       protocol.ts       message types + Transport (BroadcastChannel)
       math.ts           clamp, lerp, smoothstep, mulberry32, valueNoise1D, gaussian
+      strokes.ts        Stroke types, smoothing, symmetry, coverage, replay slicing (pure)
+      raster.ts         strokes → ink mask on a 2D canvas context (modal, thumbs, worker)
+      sdf.ts            ink mask → signed distance field, downsample, float16 (pure)
     display/
       main.ts           boot, frame loop, keys, wake lock, context loss
       gl.ts             program, fullscreen triangle, R16F array texture
@@ -97,13 +100,17 @@ ferro/
       autopilot.ts      drift time, hue jumps, preset cycle
       presets.ts        store, crossfade, randomize, mutate, undo
       store.ts          owns State; applies messages; broadcasts
+      library.ts        shape library: IndexedDB, layer slots, bake queue, live layer
+      bake.worker.ts    Web Worker: raster + sdf off the main thread
       debug.ts          on-screen overlay
     control/
       main.ts           boot, transport, render loop
       ui.ts             DOM builders
+      draw.ts           the drawing modal (B12)
       control.css
   tests/
     dsp.test.ts  modulation.test.ts  sequencer.test.ts  presets.test.ts  store.test.ts
+    strokes.test.ts  sdf.test.ts  library.test.ts
 ```
 
 ## B2. Motif assets
@@ -137,12 +144,13 @@ Max 16 motifs. Must finish in under 60 s for 12.
 Generates 12 motifs into `art/placeholders/` with Pillow, obeying B2.1 except where stroke weight is the variable: 4 designs, (1) ring with a cross, (2) four C-scrolls in a square frame, (3) half-circle fan with 7 radial bars, (4) diamond lattice in a frame, each drawn at 3 round-capped stroke weights, thin (40 px), medium (70 px) and thick (100 px). Bake warnings on some of them are expected: they exist to test how melts behave between different ink weights. Run it and the bake during the build so the app works before any real drawing exists.
 
 ### B2.4 Texture
-Upload as one `TEXTURE_2D_ARRAY`:
+One immutable `TEXTURE_2D_ARRAY` of `MAX_LAYERS = 64` layers, allocated once at boot and filled layer by layer:
 ```ts
 gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-gl.texImage3D(gl.TEXTURE_2D_ARRAY, 0, gl.R16F, cell, cell, count, 0, gl.RED, gl.HALF_FLOAT, new Uint16Array(buffer));
+gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.R16F, cell, cell, MAX_LAYERS);
+gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, layer, cell, cell, 1, gl.RED, gl.HALF_FLOAT, half /* Uint16Array, cell×cell */);
 ```
-`LINEAR` min and mag, `CLAMP_TO_EDGE`, no mipmaps. (Linear filtering of half-float textures is core in WebGL2; do not use R32F, which needs an extension to filter.)
+Layers `0 … count−1` hold the baked atlas. Layer `MAX_LAYERS − 1` is the **live layer** (B12.5). The layers in between are slots for drawn shapes (B12.3). An unfilled layer holds a blank SDF (constant +2). `LINEAR` min and mag, `CLAMP_TO_EDGE`, no mipmaps. (Linear filtering of half-float textures is core in WebGL2; do not use R32F, which needs an extension to filter.)
 
 ## B3. State model (`src/shared/state.ts`)
 
@@ -176,7 +184,15 @@ interface Session {
   frozen: boolean; fallback: boolean; blackout: boolean;
   meltHold: boolean; holdPos: number;   // manual melt scrub, 0…1
   queued: number | null;                // motif queued as next
+  live: boolean;                        // the live layer is on the projector (B12.5); never persisted
 }
+
+// Shapes (B12). Coordinates are motif units: the square canvas spans −1…+1, y up, like the shader.
+interface Stroke { pts: Float32Array; erase: boolean; group: number; }   // pts = x0,y0,x1,y1,…; group = undo step
+interface DrawnShape { id: string; name: string; createdAt: number; updatedAt: number; strokes: Stroke[]; }
+type ShapeKey = `baked:${number}` | `drawn:${string}`;
+// What the Control sees of the library (B9 `library` message). No strokes.
+interface ShapeMeta { key: ShapeKey; layer: number; name: string; enabled: boolean; thumb: string | null; drawn: boolean; }
 
 // Calibration: venue-dependent. Never stored in presets.
 interface Calib {
@@ -198,6 +214,8 @@ Persistence (all `localStorage` access in try/catch; the app must work with stor
 - `ferro.presets.v1` → presets array. If absent, load `public/presets/default.json`.
 - `ferro.calib.v1` → Calib.
 - `ferro.look.v1` → last Look, saved at most once per second, restored at boot.
+- `ferro.pool.v1` → the `ShapeKey`s whose checkbox is off (B12.3). Absent = all on.
+- IndexedDB database `ferro`, object store `shapes` keyed by `id` → `DrawnShape` records (B12.3). All access in try/catch; with IndexedDB unavailable the library works for the session and the dashboard shows "shapes won't be saved".
 
 ## B4. Parameters (`src/shared/params.ts`)
 
@@ -394,7 +412,7 @@ Everything counts in beats. A real onset is one beat. When `silent`, or no onset
 ### B7.2 States
 - **HOLD(A):** `remaining = holdBeats`, minus 1 per beat. At 0 (if `autoAdvance` and not `frozen` and not `meltHold`) → MORPH. With `holdBeats` 0 (flow) the next morph starts on the frame after landing, so the motifs melt continuously; each motif is reached for an instant, where the eased curve slows to zero speed.
 - **MORPH(A → B):** `progress += dt / (morphBeats × beatPeriod)`, with `beatPeriod` sampled when the morph starts. At 1 → A = B, HOLD.
-- Target choice: `queued` if set; else `random` (seeded, never one of the last 3 shown; relax to "not the current" when count ≤ 4) or `sequential`.
+- Target choice: `queued` if set; else `random` (seeded, never one of the last 3 shown; relax to "not the current" when the pool has ≤ 4 shapes) or `sequential` (library order). Both choose from the **pool**: the layers of the enabled shapes (B12.3), in library order. A shape unchecked while it is A stays on screen until the next morph. With an empty pool no morph starts; with a pool of one shape and A outside it, the morph goes there once.
 - Eased value sent to the shader:
 ```
 S(x)    = x² (3 − 2x)
@@ -405,7 +423,7 @@ uMorphT = mix(smooth, plateau, linger)
 Both curves have zero speed at p = 0 and p = 1, so a morph starts and lands without a jolt. The mapping p → uMorphT is strictly increasing for every `linger`, so it can be inverted (B7.4).
 
 ### B7.3 Commands
-`next`, `prev` (history stack of 32), `random`, `goto(i)` start a morph now. `queue(i)` only sets `queued`. If a morph is already running, the command is stored and the running morph is sped up to finish within 1 s; never pop.
+`next`, `prev` (history stack of 32), `random`, `goto(i)` start a morph now. `queue(i)` only sets `queued`. If a morph is already running, the command is stored and the running morph is sped up to finish within 1 s; never pop. `goto` and `queue` accept any layer that holds a shape, in the pool or not. `live(on)`, `finish(layer)` and `replay(layer)` are in B7.6.
 
 ### B7.4 Melt hold
 `meltHold = true` pauses the sequencer and sets `uMorphT = holdPos` directly (no easing). If entered during HOLD, pick B first. Entering melt hold during a MORPH sets `holdPos` to the current `uMorphT`, so nothing jumps. Leaving melt hold resumes the morph at the progress `p` whose eased value equals `holdPos` (invert the curve of B7.2 by bisection, 20 iterations), so `uMorphT` stays continuous.
@@ -417,6 +435,15 @@ Both curves have zero speed at p = 0 and p = 1, so a morph starts and lands with
 - **Preset cycle:** every `presetCycleMin` minutes, recall a random non-empty preset (not the current one) with an 8 s crossfade.
 - `frozen`: stops drift, sequencer, hue jumps and preset cycle. Audio reactivity continues.
 - `fallback`: renders a constant safe Look (the table defaults, motif 0, `react` zero except zoom and brightness), ignoring the live Look without modifying it.
+
+### B7.6 Live and replay (`sequencer.ts`)
+The live layer (`LIVE = MAX_LAYERS − 1`) is a motif like any other for the shader; what changes is who writes it (B12.5).
+
+- **`live(true)`**: a `goto(LIVE)` with the normal rule (a running morph is sped up first). The store clears `meltHold` when it applies `live(true)` or starts a replay, so the melt always runs. The shape on screen melts into the drawing with the current melt mode and `morphBeats`. The sequencer remembers `liveFrom = A`. After landing it enters **LIVE HOLD**: no auto-advance, `next/prev/random/goto/queue/replay` are ignored, `meltHold` is ignored. The drawing changes freely underneath (texture uploads), with no morph. `LIVE` never enters `history` or `recent`, so `prev` never returns to a stale drawing.
+- **`live(false)`** (the red dot switched off): a `goto(liveFrom)`, with the B7.3 rule if the melt into LIVE is still running (it is sped up to land within 1 s, then the way back starts). The projector melts back to what it showed before.
+- **`finish(layer)`**: a pending command under the B7.3 rule: if the melt into LIVE is still running it is sped up to land within 1 s first. Once landed, the Display has copied the live SDF into `layer`, so the picture is identical: set `A = B = layer`, `uMorphT = 0`, phase HOLD with `remaining = holdBeats`. No frame changes the picture. The store sets `session.autoAdvance = false` and `session.live = false`: the flow is restarted by hand (auto, Next, or flow). `finish` with no free slot (`free = 0`) saves nothing: the store answers `shapeError` and runs `live(false)`.
+- **`replay(layer)`** (a drawn shape only): a `goto(LIVE)` while `library.ts` rebuilds the live layer from a growing prefix of the shape's strokes (B12.6). The reveal and the melt share the same clock: both complete at `morphBeats × beatPeriod`. When the reveal is complete the sequencer runs `finish(layer)` itself, **without** touching `autoAdvance` (a replay is a transition, not a live session). If `blackout` is on when a replay starts, the store releases blackout and the melt source is the blank live layer, so the drawing appears on black.
+- `frozen` pauses live melts like any morph. `fallback` renders over everything as usual; live continues underneath.
 
 ## B8. Presets, randomize, undo (`presets.ts`)
 
@@ -439,13 +466,26 @@ Both curves have zero speed at p = 0 and p = 1, so a morph starts and lands with
 { t: 'setParam', id: ParamId, field: 'base' | 'react' | 'band' | 'thr' | 'lock', value }
 { t: 'setOption', key, value }  { t: 'setSession', key, value }  { t: 'setCalib', key, value }
 { t: 'cmd', name: 'next' | 'prev' | 'random' | 'goto' | 'queue' | 'randomize' | 'mutate' | 'reset' | 'undo'
-              | 'savePreset' | 'loadPreset' | 'deletePreset' | 'renamePreset' | 'importPresets', arg? }
+              | 'savePreset' | 'loadPreset' | 'deletePreset' | 'renamePreset' | 'importPresets'
+              | 'replay', arg? }                                    // replay: arg = ShapeKey of a drawn shape
+// shapes (B12)
+{ t: 'shapeSave', id?: string, name: string, strokes: Stroke[] }    // no id = new shape; id = update in place
+{ t: 'shapeDelete', id }  { t: 'shapeRename', id, name }  { t: 'shapeEnable', key: ShapeKey, enabled }
+{ t: 'shapeDuplicate', id }  { t: 'shapeGet', id }                   // → shapeStrokes
+{ t: 'shapesImport', shapes: DrawnShape[] }
+{ t: 'live', on: boolean, strokes: Stroke[] }                       // enter / leave live mode
+{ t: 'liveStrokes', strokes: Stroke[] }                             // full list, ≤ 10×/s, and ≥ 1×/s while live (heartbeat)
+{ t: 'liveFinish', id?: string, name: string, strokes: Stroke[] }   // save (new or update) and keep it on screen
 
 // Display → Control
 { t: 'state', state: State, manifest, devices }                    // on hello, and ≤ 10×/s after changes
 { t: 'meters', audio: AudioFrame, values: number[31],              // effective param values, normalised
   motifA, motifB, morphT, holdRemaining, fps, error?: string }     // 20×/s; doubles as heartbeat
+{ t: 'library', version: number, shapes: ShapeMeta[], free: number } // on hello and whenever the library changes; free = empty slots
+{ t: 'shapeStrokes', id, strokes: Stroke[] }                       // answer to shapeGet, and after shapeDuplicate (the copy)
+{ t: 'shapeError', text }                                          // e.g. "library full", "shape too big"
 ```
+Strokes travel as structured clones (`Float32Array` inside), never as JSON.
 `store.ts` is a reducer `(State, message) → State`, unit-tested. The Display is the only writer. The Control never keeps a value it has not received back in a `state` message, except while a slider is being dragged.
 
 ## B10. Control dashboard (`control.html`)
@@ -455,8 +495,10 @@ Dark, low-luminance UI (the laptop must not light the room): background `#0b0b0d
 **Top bar:** connection status (`DISPLAY OFFLINE` in red if no `meters` for 1 s) · fps · input level meter with clip LED · low, mid, high, energy meters · beat LED · BPM · buttons Freeze, Fallback, Blackout.
 
 **Left column: shapes**
-- Thumbnail grid. Current A = solid outline, morph target B = accent outline, queued = dashed.
-- Click = queue. Double-click = go now. Buttons Prev, Next, Random.
+- Thumbnail grid of the whole library (B12.3), baked shapes first, then drawn shapes in creation order; the grid scrolls inside the column, it never grows the page. Current A = solid outline, morph target B = accent outline, queued = dashed, live layer (when live) = red outline.
+- Each tile: a checkbox (the pool, B12.3; on by default) and, on hover, the name and small buttons: drawn shapes get **edit**, **duplicate**, **draw in** (replay, B7.6) and **delete** (asks "Delete <name>?" first); baked shapes get none.
+- Click = queue. Double-click = go now. Buttons Prev, Next, Random, **Draw** (opens the drawing modal, B12.1; key P).
+- Export shapes / Import shapes (B12.7), and "N free" (slots left).
 - Morph progress bar and beats remaining in the hold.
 - `autoAdvance` toggle, `order`, `holdBeats`, `morphBeats`.
 - Melt mode (3 buttons), mirror X, mirror Y, spin, hue jump every, hue jump amount.
@@ -489,7 +531,9 @@ Dark, low-luminance UI (the laptop must not light the room): background `#0b0b0d
 | F | Freeze | S | Save preset |
 | B | Fallback | 1–9 | Recall preset |
 | K | Blackout | D | Debug overlay (Display) |
-| Enter | Fullscreen (Display) | | |
+| Enter | Fullscreen (Display) | P | Draw (Control) |
+
+While the drawing modal is open, the dashboard keys above are off and the modal's own keys (B12.1) apply.
 
 ## B11. Display window (`index.html`)
 
@@ -500,6 +544,67 @@ Dark, low-luminance UI (the laptop must not light the room): background `#0b0b0d
 - Debug overlay (D): meters, raw band levels in dB, beat flash, BPM, fps, sequencer state, seed, device name, last error.
 - Soak log: every 60 s push `{ t, fpsAvg, fpsMin, heapMB, motif, beatCount }` to an array (max 600 entries); downloadable as JSON from the overlay.
 - `?seed=<n>` sets the PRNG seed (default: the date as YYYYMMDD).
+
+## B12. Drawing tool and shape library
+
+The drawing tool lives in the Control (`src/control/draw.ts`) as a **modal over the dashboard**: nothing opens a new tab or window, so nothing can land on the projector by accident. Shapes, baking and the live layer live in the Display (`src/display/library.ts`), which owns all state.
+
+### B12.1 The modal
+- Opens with the Draw button or **P**, always in **not-live** mode, with an empty canvas (new) or the shape's strokes (edit, duplicate). Covers the dashboard; the rest of the dashboard is not usable until it closes.
+- A square canvas as large as fits, mapped to motif units −1…+1 (y up). It shows: the **safe area** frame (the central 80%, B2.1) in faint grey; the **ghost** (B12.2) under the ink; the ink in white on black; the live in-progress stroke.
+- **Top bar:** name field (keys are ignored while it has focus) · symmetry: `free · X · Y · XY · R4 · R6 · R8` · ghost select · brush / eraser · undo / redo · clear.
+- **Bottom bar:** coverage readout (`ink 14%`) with the B2.1 warnings in amber when they apply (coverage outside 10–25%, ink in the outer 10% margin, centroid off by > 5%) · stroke count.
+- **Right:** **LIVE** toggle with a red dot that blinks (CSS, 1 Hz) while on · **Save** (not live: save, close) / **Finish** (live: save, keep on screen, close) · **Close** (X).
+- **Keys inside the modal:** `Z` undo, `Shift+Z` redo, `B` brush, `E` eraser, `M` cycles symmetry, `L` toggles live, `Esc` = Close.
+- **One brush.** Fixed round brush of diameter `BRUSH = 100 / 1024` motif units (the thick placeholder weight, 100 px at 2048). The eraser is the same size and records `erase: true` strokes, painted in order with the ink, so an erased area can be inked again later. Mouse only: `pointerdown` starts a stroke, `pointermove` adds points, `pointerup` or leaving the canvas ends it.
+- **Light smoothing:** a stored point is the mean of the raw pointer position and the previous stored point; raw points closer than 1 canvas px to the previous stored point are dropped. Nothing else: the hand stays visible.
+- **Symmetry** is applied while drawing: one hand stroke produces `n` strokes (X 2, Y 2, XY 4, R4/R6/R8 = 4/6/8 copies rotated about the centre), all with the same `group` id, so undo removes the whole set. R-modes have no mirror; XY = the four reflections. The symmetry mode is a tool setting, not a property of the shape: strokes are stored already multiplied.
+- **Undo/redo** are per group, 200 deep, kept while the modal is open. Clear is one undoable step.
+- **Closing rules.** Close or Esc with a non-empty canvas **saves** (new shape, or update in place when editing). Close with an empty canvas saves nothing. Close while live = Finish. Nothing drawn is ever lost by closing.
+- **Limits.** A shape holds at most 20 000 points; the tool refuses new strokes beyond that and says so. A new shape is refused when the library has no free slot (`library.free = 0`): the Draw and duplicate buttons are disabled and show "library full".
+
+### B12.2 Ghost layer
+A faint (25% grey) rendering of another shape under the ink, as a tracing guide for drawing the next shape on top of the previous one. Choices: **current** (default: the shape on the projector, A), **none**, or any library shape. While live, **current** stays frozen on the shape that was A when LIVE went on (`liveFrom`), and follows A again when LIVE goes off. For a drawn shape the Control asks the Display for its strokes (`shapeGet`) and rasterises them with `raster.ts`; for a baked shape the Control fetches `sdf/atlas.bin` once (lazily, the first time a baked ghost is chosen) and draws the mask `d ≤ 0` of that layer. The ghost is never part of the drawing.
+
+### B12.3 Library (`library.ts`)
+- The library = the baked shapes (manifest, layers `0 … count−1`) + the drawn shapes (IndexedDB), in that order. `free = MAX_LAYERS − 1 − count − drawnCount`.
+- A drawn shape gets the lowest free layer when saved; the layer is released on delete. Layers of existing shapes never change while the Display runs. Keys (`baked:3`, `drawn:<id>`) are the stable identity; layers are for the shader and the sequencer only.
+- `shapeSave` with an `id` re-bakes into the same layer. If that shape is on screen the picture updates on upload; that is intended.
+- `shapeDelete` of the shape on screen: the layer is cleared to blank after the next morph away from it; until then it stays visible. A deleted shape is removed from the pool and the history immediately.
+- `shapeDuplicate` creates a copy named `<name> copy` and answers with its strokes so the modal can open it.
+- **Pool (checkboxes):** `enabled` per shape, stored in `ferro.pool.v1` as the list of disabled keys. Baked and drawn shapes alike. Only the pool is used by `random`, `sequential`, auto-advance and `queued` picking; `goto` and the tiles still reach every shape (B7.2).
+- Thumbnails: the Display renders 160×160 PNG data URLs with `raster.ts` (white ink on transparent, like the bake's thumbs) when a drawn shape is saved, and sends them in `library`. Baked thumbs are the files in `sdf/thumbs/`.
+- Boot: open IndexedDB, load all drawn shapes, bake them in the worker in creation order and upload each on arrival; the Display renders from the baked atlas meanwhile. Send `library` after the first upload and after every change (`version` increments).
+- At boot the pool, history and `queued` are validated against the library; unknown keys are dropped.
+
+### B12.4 In-browser bake (`sdf.ts`, `raster.ts`, `bake.worker.ts`)
+Same result as `tools/bake_sdf.py` (B2.2), computed in a Web Worker so the projector never stalls:
+1. `raster.ts`: draw the strokes in order onto a square 2D canvas of `R = 2 × cell` px (1024): round caps and joins, line width `BRUSH × R / 2`, ink white on black, `erase` strokes with `globalCompositeOperation = 'destination-out'`. `ink = alpha ≥ 128`. (OffscreenCanvas in the worker; the same function draws the modal, the ghost and the thumbs, so all four agree.)
+2. `sdf.ts`: exact Euclidean distance transform (Felzenszwalb–Huttenlocher, two 1D passes) of `ink` and of `~ink`; `d_px = edt(~ink) − edt(ink)`, negative inside; motif units `d = d_px × 2 / R`. Not clamped. A blank mask gives the constant `+2`.
+3. Downsample `R → cell` by 2×2 mean. Convert to float16 (`Uint16Array`, round to nearest even) and post it back transferable.
+4. Budget: ≤ 60 ms per bake for 20 000 points at `cell` 512 on the show laptop. One job in flight per purpose (library, live); a newer request replaces a waiting one.
+
+### B12.5 Live mode
+- **LIVE on** (modal): the Control sends `{ t: 'live', on: true, strokes }`. The Display bakes the strokes into the live layer and runs `live(true)` (B7.6): the shape on the projector melts into the drawing. If the canvas is empty the shape melts into black; the first stroke then appears on black. That is intended.
+- While live the Control sends `liveStrokes` (the full list, including the stroke under the mouse) whenever the drawing changes, at most 10×/s, and at least once a second as a heartbeat. The Display re-bakes into the live layer, latest wins, and uploads on arrival. The projector follows the mouse with the bake latency (≈ 0.1–0.2 s).
+- **LIVE off** (red dot, or `L`): `{ t: 'live', on: false }` → `live(false)`: the projector melts back to the previous shape. The modal stays open, not live, drawing intact.
+- **Finish**: `liveFinish` → the Display saves the shape (new or update), copies the live SDF into its layer, runs `finish(layer)`, sets `autoAdvance` off and `live` off (B7.6). The modal closes. The tile is outlined as current A.
+- **Safety net:** 3 s without `liveStrokes` while `session.live` (dashboard closed, crashed, reloaded) → the Display finishes by itself with the last strokes it received (saved as `live <HH:MM:SS>`), or, with no ink at all, runs `live(false)`. The projector is never left on a half-state. On its next `hello` the Control sees `live: false` and opens any modal in not-live mode as always.
+- The Display reload while live: `live` is not persisted, the live layer is blank after reload, the sequencer boots on `A = 0` as usual.
+- Every effect, mirror, melt mode and the autopilot apply to the live layer exactly as to any motif. `session.live` is shown in the top bar of the dashboard (`LIVE` in red) and the debug overlay.
+
+### B12.6 Replay (draw in)
+`cmd replay` with a drawn shape's key: `library.ts` plays the shape's strokes back in drawing order at constant ink speed over `morphBeats × beatPeriod` (the sequencer's clock, B7.6): at progress `q` the live layer holds the prefix of the total path length `q × L` (`strokes.ts` slices a stroke list at a path length; eraser strokes count in the path like ink). Re-bake at most 10×/s. Meanwhile the sequencer melts A into the growing live layer, so the old shape fuses with the appearing lines; on black (blackout released, B7.6) the drawing simply appears. At `q = 1` the sequencer finishes onto the shape's own layer. Replay of a shape with no strokes (baked) is impossible and the button is absent.
+
+### B12.7 Export and import
+- **Export shapes:** downloads `ferro-shapes-YYYYMMDD-HHMM.json` with every `DrawnShape` (`pts` as plain arrays) and the disabled keys. **Import shapes:** validates and adds, new ids, skipping shapes that would not fit.
+- **PNG** (per tile, drawn shapes): downloads a 2048×2048 black-on-white PNG of the shape per B2.1, named `<name>.png`, for `art/png/` and `npm run bake`. That is the way a drawn shape becomes a baked, committed one.
+- The presets Export/Import are unchanged and never include shapes.
+
+### B12.8 Rules
+- `strokes.ts` and `sdf.ts` are pure (no DOM): symmetry, smoothing, coverage and centroid, path slicing, EDT, downsample, float16. `raster.ts` takes any `CanvasRenderingContext2D`-like context.
+- The reducer stays pure. `library.ts` does the IndexedDB and worker work and feeds results back to the store as messages; the store never awaits.
+- Zero runtime dependencies still: the worker is `new Worker(new URL('./bake.worker.ts', import.meta.url), { type: 'module' })`.
 
 ---
 
@@ -516,6 +621,7 @@ Dark, low-luminance UI (the laptop must not light the room): background `#0b0b0d
 7. `control/`.
 8. `public/presets/default.json`: 6 presets written by hand from the table (Calm, Pulse, Thorns, Moiré, Kaleido, Peak), each clearly different.
 9. `README.md`: install, bake, run, show-day launch command, "Decisions", "Not verified".
+10. B12, on top of the working app: `strokes.ts`, `sdf.ts` with tests first; `raster.ts`, `bake.worker.ts`, `library.ts` with tests (fake IndexedDB and worker); sequencer B7.6 and store messages with tests; B2.4 texture change; then `control/draw.ts` and the shapes column.
 
 ## C2. Required unit tests
 
@@ -524,6 +630,10 @@ Dark, low-luminance UI (the laptop must not light the room): background `#0b0b0d
 - **sequencer:** same seed + same beat stream → same motif sequence; no motif repeats within 3 transitions (count ≥ 5); in silence a morph still starts after `holdBeats × 0.5 s`; with `holdBeats` 0, HOLD lasts at most 1 frame; `uMorphT` is continuous: at 60 fps no frame changes it by more than 0.05, including when a command arrives during a morph and when melt hold is entered or left at any position; the eased curve has `uMorphT = 0.5` at `p = 0.5` for every `linger`, zero speed at `p = 0` and `p = 1`, and is strictly increasing; inverting it returns `p` within 1e-4.
 - **presets:** save → export → import round-trip is identical; randomize and mutate never change locked params and never leave rand or min…max ranges; crossfade endpoints are exact; undo restores the previous Look; hue interpolates the short way.
 - **store:** every message type; unknown messages are ignored; a corrupt `localStorage` value falls back to defaults.
+- **strokes:** smoothing keeps a straight raw line straight and never lags the raw point by more than half the sample spacing; a point under R6 gives 6 points at the same radius, 60° apart, one group; X mirror negates x only; coverage of a known disc is within 2% of its area; slicing a path at `q × L` returns a prefix whose length is `q × L` within 1e-6, monotonic in `q`, and the whole list at `q = 1`.
+- **sdf:** on a mask holding one centred disc, the field matches the analytic distance within 1 px everywhere, negative inside; a blank mask gives a constant `+2`; the 2×2 downsample is the mean; float16 round-trip of `|d| ≤ 2` is within 2e-3; the bake of a 20 000-point shape runs in under 60 ms in the test runner.
+- **sequencer (B7.6):** `live(true)` melts A → LIVE with the normal timing and `uMorphT` continuity; while live no auto-advance happens and `next/random/goto` are ignored; `live(false)` returns to the previous A; `finish(layer)` after landing sets `A = B = layer`, `uMorphT = 0` with no frame changing the picture, and during the melt into LIVE it speeds the melt up to land within 1 s first; `LIVE` never appears in `history`; the pool: only enabled layers are ever chosen, an empty pool never starts a morph, `goto` outside the pool works; replay progress reaches exactly 1 at `morphBeats × beatPeriod` and then finishes without touching `autoAdvance`.
+- **library:** save assigns the lowest free layer and bumps `version`; delete frees the layer and removes the key from the pool, history and `queued`; a full library refuses a save with `shapeError`; the pool survives a reload; the live safety net finishes after 3 s without `liveStrokes` and does nothing when not live; import skips shapes that don't fit.
 
 ## C3. Definition of done
 
@@ -533,6 +643,8 @@ Dark, low-luminance UI (the laptop must not light the room): background `#0b0b0d
 - [ ] Closing and reopening `/control.html` does not disturb the Display.
 - [ ] Every param in the table has a dashboard row and a visible effect.
 - [ ] Zero runtime dependencies in `package.json`.
+- [ ] Drawing: a shape drawn in the modal appears in the grid with its thumbnail, survives a Display reload, melts like a baked one, and its PNG export passes `tools/bake_sdf.py` with no warnings when drawn inside the safe area at 10–25% ink.
+- [ ] Live: with the synth source, LIVE on melts the current shape into the canvas; lines appear on the projector while the mouse moves; Finish leaves the drawing as A with auto-advance off; closing the dashboard while live finishes within 3 s.
 
 If a headless browser is available, use it to confirm the shader compiles and the page logs no errors. If not, say so under "Not verified" in the README. Do not claim visual results you have not seen.
 
@@ -552,16 +664,16 @@ The agent builds; you test. Each milestone has a pass condition. Do not move on 
 
 | Day | Work | Your hours |
 |---|---|---|
-| Thu 12 | Launch the agent on this spec. M0. Draw motif 01 and bake it. | 2.5 |
-| Fri 13 | Fix loop on whatever M0 exposed. M1 (audio). M2 (effect audit). | 4 |
-| Sat 14 | Draw motifs 02–12. | 5 |
-| Sun 15 | M3 (melt pairs). M4 (sweet-spot hunt). | 4.5 |
-| Mon 16 | Finish M4. Start M5 (soak). **Feature freeze.** | 2 |
-| Tue 17 | Fix only what the soak found. Buffer. | 1 |
-| Wed 18 | M6 (venue). | 2 |
-| Thu 19 | Show. No code changes. | — |
+| Mon 16 | B12 spec agreed. The agent builds B12. | 1 |
+| Tue 17 | M7 (drawing tool). Fix loop. | 2.5 |
+| Wed 18 | Draw the real motifs in the tool, export PNGs, bake. M3 (melt pairs). | 4 |
+| Thu 19 – Sat 21 | M1 (audio) if not done, M2 (effect audit), M4 (sweet-spot hunt). | 6 |
+| Sun 22 | M5 (soak). | 1 |
+| Mon 23 | Fix only what the soak found. **Feature freeze.** | 1 |
+| Tue 24 – Wed 25 | M6 (venue). Buffer. | 2 |
+| Thu 26 | Show. No code changes. | — |
 
-About 21 h. A one-pass build will have bugs: Friday's first 1–2 h are reserved for them.
+M0 passed on 14 Nov on the venue chain (mixer → Focusrite → Display → projector).
 
 ## D2. Milestones
 
@@ -594,6 +706,12 @@ About 21 h. A one-pass build will have bugs: Friday's first 1–2 h are reserved
 - Gain staging: Focusrite on LINE, gain so the dashboard level meter peaks around −12 to −6 dB on the loudest track and the clip LED never lights. Then `inputGain` stays near 1.
 - Projector: check black level and edges. Adjust `brightness`, `sat`, `thickness`, `glow` for the room and overwrite the presets that need it.
 - Pass: 15 minutes of a real set, hands off, looks right from the back of the room.
+
+**M7 — Drawing tool (1 h).** `/?src=synth` and the dashboard. Draw a shape with R6, save it; edit it; duplicate it; delete the copy; uncheck a baked shape and watch random order skip it.
+- Look at: the stroke feels like your hand with a hint of smoothing; the ghost of the current shape is visible but never confused with ink; the saved shape melts into and out of baked ones without popping; the thumbnail matches.
+- Live: LIVE on, draw while the synth plays: lines appear on the projector within a blink, the kick moves them; LIVE off melts back; Finish keeps the drawing and stops the flow. Close the dashboard tab while live: within 3 s the Display finishes on its own.
+- Replay: "draw in" on a saved shape with blackout on: the drawing appears on black, line by line, in your stroke order.
+- Pass: no console errors in either window; 60 fps on the projector while drawing live.
 
 ## D3. Symptom → knob
 
