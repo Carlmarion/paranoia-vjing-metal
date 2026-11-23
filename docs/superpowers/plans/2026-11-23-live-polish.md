@@ -13,7 +13,8 @@
 ## Global Constraints
 
 - Every formula, range and constant comes from the design; copy values verbatim (`GLOW_CUTOFF = 0.08`, `AMBIENT_FADE_S = 5`, `AMBIENT_ENV = { attack: 0.3, sustain: 0.5, decay: 2, release: 4 }`, zoom row `log 0.5…3`, react `0.034`, driftAmp `0.023`, `reactScale 0.5`).
-- Existing Looks and presets must render as before: neutral envelope returns its input exactly; a v1 Look keeps the same zoom push at its base.
+- Existing Looks and presets must render as before **with the stop off**: neutral envelope returns its input exactly; a v1 Look keeps the same zoom push at its base. With the stop on (the default) a zoom kick may be trimmed; that is intended (design §4.4).
+- Steps marked **Carl checks** are visual judgements. Do not tick them yourself: start the app, tell Carl what to look at, and wait for his answer before the commit of that task.
 - No shader change (`src/display/shader.frag` is untouched).
 - Pure modules have no DOM access; time constants always use `dt`.
 - Before every commit: `npm run check` and `npm run lint` pass, then run the `/gandalf` skill and fix what it flags (project rule). If `/gandalf` recommends a new ESLint rule, write it before going on.
@@ -149,7 +150,7 @@ Session.zoomStop: boolean;                            // default true; accepted 
 zones: { zoom: [number, number]; mirrorShift: [number, number] };
 ```
 
-- [ ] **Step 1: Failing tests** (`tests/modulation.test.ts`), with `geom = { radius: 0.8, ax: 1, ay: 1, morphing: false }` and a Look with thickness, spikes, warp, glow react at 0:
+- [ ] **Step 1: Failing tests** (`tests/modulation.test.ts`), with `geom = { radius: 0.8, ax: 1, ay: 1, morphing: false }`, `autopilot: 0` (no drift), and a Look where thickness, spikeAmp, warpAmt, tiltX, tiltY have `base 0` and `react 0` (the default `warpAmt.base` of 0.01 would move the limit to about 1.228):
   - zoom base 1.0, react +1 on `low`, `low: 1`: value is `1.25` within 1e-3 with the stop on, and the unstopped value with `zoomStop: false`.
   - zoom base 1.5 (hand past red), same sound: value is exactly `1.5`.
   - react −1: value below base, unchanged by the stop.
@@ -171,7 +172,7 @@ zones: { zoom: [number, number]; mirrorShift: [number, number] };
 - [ ] **Step 2:** In `applyMeters`, call `setZones` on the `zoom` and `mirrorShift` base sliders from `m.zones`.
 - [ ] **Step 3:** Add a `stop` checkbox row in the Performance block wired to `setSession('zoomStop', …)`, reflected in `applyState`.
 - [ ] **Step 4:** Amend `SPEC.md`: B3 (`v`, `zoomStop`), B4.1 (stop), B4.2 (zoom row, `reactScale`, new subsection for reach), B8 (randomize/mutate scale), B9 (`zones`), B10 (zones, stop toggle), C2 (new tests), D3 ("shape leaves the window → watch the red zone; stop on").
-- [ ] **Step 5:** `npm run check && npm run lint`. Run `npm run dev`, open `http://localhost:5173/?src=synth` and `/control.html`: drag zoom to 3 (the shape fills the window, zones visible, the hand is free); with zoom just under red, confirm the kick's tick stops at the red edge; toggle stop off and see it pass. Turn mirror Y on and check the mirrorShift zones appear.
+- [ ] **Step 5:** `npm run check && npm run lint`. **Carl checks:** Run `npm run dev`, open `http://localhost:5173/?src=synth` and `/control.html`: drag zoom to 3 (the shape fills the window, zones visible, the hand is free); with zoom just under red, confirm the kick's tick stops at the red edge; toggle stop off and see it pass. Turn mirror Y on and check the mirrorShift zones appear.
 - [ ] **Step 6:** `/gandalf`, commit `Dashboard: zoom and mirror-shift zones, stop toggle; SPEC`.
 
 ---
@@ -205,7 +206,7 @@ export function envCurve(env: Env, samplesPerSection: number): { attack: Float32
   - `{ attack: 0, sustain: 0.4, decay: 1, release: 0 }`, `g = 1` for 10 s: `y` starts at 1 and ends within 0.01 of 0.4.
   - `{ attack: 0, sustain: 1, decay: 1, release: 2 }`: `g = 1` then 0; after 2 s `y` is `1/e` within 0.01.
   - `{ attack: 0, sustain: 0.3, decay: 0.3, release: 4 }`: a 0.1 s hit, 1 s quiet, a second 0.1 s hit → second peak lower than the first; after 60 s quiet a third hit peaks within 1% of the first.
-  - same input at 30 and 120 fps → `y` within 2%.
+  - `{ attack: 0, sustain: 0.3, decay: 0.3, release: 1 }`, a 0.2 s hit then 2 s quiet, at 30 and at 120 fps → the peak is exactly 1 at both, and `y` sampled every 0.1 s agrees within 2%.
   - **Review Focus 3:** `dt = 5` and `dt = 0` with any settings in range keep `c` and `y` in 0…1 and finite.
   - `tests/state.test.ts`: a Look without `env` migrates to neutral for all three groups; out-of-range numbers are clamped.
   - `tests/presets.test.ts`: `lerpLook` endpoints exact and midpoint linear for env; `cloneLook` deep-copies env; randomize and mutate leave env alone; `resetLook(look, 'line')` resets only line's env; full reset all three.
@@ -231,7 +232,7 @@ envLead: Record<EnvGroup, { level: number; stage: 0 | 1 | 2 | 3 }>;
 ```
 
 - [ ] **Step 1: Failing tests:**
-  - with default (neutral) Looks every existing modulation test still passes, and the values over a 600-frame random audio run equal a run of the pre-change formula (`u_base + drift + react × gate`).
+  - with default (neutral) Looks every existing modulation test still passes, and, with `zoomStop: false`, the values over a 600-frame random audio run equal a run of the pre-change formula (`u_base + drift + react × gate`).
   - shape env `{ release: 2 }`: zoom with react on `low`, `low` 1 → 0: the value is still above base 1 s later; `waveAmt` (inner) with the same sound is back at base immediately.
   - `envLead.shape` reports the highest `y` among shape params with `react ≠ 0` and a band; stage is 1 while rising, 2 holding, 3 falling, 0 idle (design §5.4).
   - store: `setEnv` clamps to `ENV_RANGES`; an unknown group, key or non-number returns the same model by reference.
@@ -258,7 +259,7 @@ export class EnvEditor {
 - [ ] **Step 1:** Build the widget on a canvas, following design §5.4 exactly: the curve comes from `envCurve` (never an approximation); three sections split by thin yellow vertical markers; dots A (x → attack), S (x → decay, y → sustain), R (x → release); each dot's travel covers its full range; shift-drag is ×0.1; double-click resets that dot to neutral; values printed small under the axis; soft fill under the curve; the live dot sits on the section given by `stage` at height `level`, brightness following `level`, and is hidden at stage 0. The mini canvas (about 64×18 px) shows the same curve and live dot, no handles.
 - [ ] **Step 2:** In `main.ts`, for the shape, line and colour panels: put `mini` and a `▾` button in the header before the spacer; the editor body under the header; send `setEnv` through the existing `queueSend` throttle; call `set` in `applyState` and `setLive` in `applyMeters`.
 - [ ] **Step 3:** Amend `SPEC.md`: B3 (`Env`, `Look.env`), B4.1 (envelope stage and formula), B8 (lerp, reset, randomize rules), B9 (`setEnv`, `env` meters), B10 (editor), C2, D3 ("too jumpy on slow music → open the group's curve: lower sustain, lengthen release").
-- [ ] **Step 4:** `npm run check && npm run lint`. In the running app with `?src=synth`: open the shape curve, drag R right and watch zoom linger after each kick; drag S down and watch the kicks weaken; the live dot moves along the curve; a reload keeps the settings; an old preset still looks as before.
+- [ ] **Step 4:** `npm run check && npm run lint`. **Carl checks:** In the running app with `?src=synth`: open the shape curve, drag R right and watch zoom linger after each kick; drag S down and watch the kicks weaken; the live dot moves along the curve; a reload keeps the settings; an old preset still looks as before.
 - [ ] **Step 5:** `/gandalf`, commit `Dashboard: envelope editor with live dot; SPEC`.
 
 ---
@@ -320,10 +321,10 @@ export function mutate(look: Look, rng: Rng, group?: Group, ambient?: boolean): 
   - persistence: `Persister` writes `ferro.ambient.v1` when the stash changes and writes `null` when it clears; `initialModel` with a stored valid stash boots with `ambient: true` and that stash; a corrupt value boots with ambient off.
   - **Review Focus 4:** while on, `importPresets` of a v1 file (no `env`, no `v`) then `loadPreset` of an imported slot → Look is v2, calmed; off restores the migrated preset's reacts.
 - [ ] **Step 2:** Run — expect FAIL.
-- [ ] **Step 3:** Implement in the reducer. `changeLook` takes the ambient flag for `pushUndo`. One helper applies "transform if ambient" to recall, reset and pre-ambient undo entries so the three paths cannot diverge.
+- [ ] **Step 3:** Implement in the reducer. `Persister.update` gains a third argument, `stash: AmbientStash | null` (the stash is on the `Model`, not the `State`); `main.ts` passes `model.ambientStash`. `changeLook` takes the ambient flag for `pushUndo`. One helper applies "transform if ambient" to recall, reset and pre-ambient undo entries so the three paths cannot diverge.
 - [ ] **Step 4:** Dashboard: an `Ambient` button in the Performance block (class `on` while lit), `AMBIENT` in the top bar next to `LIVE`, key `A` through the existing key handler.
 - [ ] **Step 5:** Amend `SPEC.md`: B3 (`ambient`, the `ferro.ambient.v1` key), B8 (new "Ambient" subsection with the rules of design §6), B9 (`ambient` cmd), B10 (button, key table, top bar), C2, D3 ("music turns ambient → `A`"), D4 runbook (a reload keeps Ambient).
-- [ ] **Step 6:** `npm run check && npm run lint`. In the running app: press `A` and watch the kick reactions fade out over 5 s and the curves change to long tails; raise one react by hand; press `A` again and check everything else returns over 5 s; press `A`, reload the Display, check `AMBIENT` is still lit and `A` restores.
+- [ ] **Step 6:** `npm run check && npm run lint`. **Carl checks:** In the running app: press `A` and watch the kick reactions fade out over 5 s and the curves change to long tails; raise one react by hand; press `A` again and check everything else returns over 5 s; press `A`, reload the Display, check `AMBIENT` is still lit and `A` restores.
 - [ ] **Step 7:** `/gandalf`, commit `Ambient mode: 5 s calm-down, give-back, survives reload; SPEC`.
 
 ---
@@ -377,5 +378,5 @@ export class HueStrip {
 - [ ] **Step 1:** Build the strip per design §7.2: the wheel 0…1 drawn with `hsv2rgb` at the live `sat`; two handles (label them `glow` and `core`); dragging one keeps the other in place, dragging between them moves both; handles and bracket wrap around the ends (draw a wrapped span as two pieces); the live bracket is a bright outline over the span, the handles are thin lines. Shift-drag is ×0.1.
 - [ ] **Step 2:** In `main.ts`: place the strip at the top of the colour panel, above the rows. `onInput` sends two `setParam` messages (`hue.base`, `hueDepth.base`) through `queueSend`. `set` from `applyState`; `setLive` from `applyMeters` using `liveSpan` with the effective values (convert `m.values` with `fromNorm`) and `m.hueOffset`. The `hue` and `hueDepth` rows stay unchanged.
 - [ ] **Step 3:** Amend `SPEC.md`: B9 (`hueOffset`), B10 (strip), C2, and a plain-words note under B5 step 10 explaining what `hue`, `hueDepth` and `hueSpace` do. Add milestone **M8 — Live polish (1 h)** in D2: one techno track and one ambient track; look at the zones and the stop at zoom 1–3 on the three largest shapes, the envelope on each group, `A` in and out, the strip against the projected colours; note which constants to retune (`GLOW_CUTOFF`, `AMBIENT_ENV`, the zoom max). Update `README.md` with a short "Live controls" section (zones and stop, curves, `A`, the strip).
-- [ ] **Step 4:** `npm run check && npm run lint`. In the running app: the handles sit on the colours the projector shows at rest; the bracket stretches on kicks and slides with autopilot; turn on hue jumps and watch the bracket jump; drag each handle and check only that colour moves.
+- [ ] **Step 4:** `npm run check && npm run lint`. **Carl checks:** In the running app: the handles sit on the colours the projector shows at rest; the bracket stretches on kicks and slides with autopilot; turn on hue jumps and watch the bracket jump; drag each handle and check only that colour moves.
 - [ ] **Step 5:** `/gandalf`, commit `Dashboard: colour strip; SPEC M8, README`. Push the branch.

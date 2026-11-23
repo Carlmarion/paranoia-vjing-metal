@@ -21,7 +21,7 @@ Playing the piece live showed four problems that only show up live:
 - One envelope per group for shape, line and colour, edited by dragging three dots on a curve, with a live dot showing where the effect is now.
 - An Ambient button: 5 s fade, removes kick, beat and high reactions, sets long tails, gives everything back when pressed again.
 - A colour strip showing the at-rest colours as two handles and the colours on screen now as a bracket.
-- Every existing preset looks the same after the update, until Carl touches the new controls.
+- Every existing preset looks the same after the update, until Carl touches the new controls. One accepted exception: the stop is on by default and can trim a zoom kick (§4.4); with the stop off the picture is identical.
 
 **Non-goals**
 - No envelope for the melt and inner groups.
@@ -142,10 +142,10 @@ New pure module `src/display/envelope.ts`, unit-tested. Per param in the three g
 
 ```
 // fatigue: the charge drains under input and refills in quiet
+x      = g × c                                        // use the charge BEFORE draining it: the first frame of a hit is full strength at any frame rate
 target = 1 − (1 − sustain) × g
 τc     = target < c ? decay : max(decay, release)     // refilling takes at least as long as the tail
 c     += (target − c) × (1 − exp(−dt / τc))
-x      = g × c
 
 // attack / release
 τ  = x > y ? attack : release
