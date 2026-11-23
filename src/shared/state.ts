@@ -46,6 +46,8 @@ export interface Session {
   queued: number | null;
   /** The live layer is on the projector (B12.5). Never persisted. */
   live: boolean;
+  /** Design §4.4: sound and drift cannot push zoom or mirror shift past the window edge. */
+  zoomStop: boolean;
 }
 
 /** Venue-dependent. Never stored in presets. */
@@ -122,7 +124,7 @@ export function fallbackLook(): Look {
 export function defaultSession(): Session {
   return {
     autopilot: 0.5, reactMaster: 1, xfade: 3, autoAdvance: true, order: 'random', presetCycleMin: 0,
-    frozen: false, fallback: false, blackout: false, meltHold: false, holdPos: 0, queued: null, live: false,
+    frozen: false, fallback: false, blackout: false, meltHold: false, holdPos: 0, queued: null, live: false, zoomStop: true,
   };
 }
 

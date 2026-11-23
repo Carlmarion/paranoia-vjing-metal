@@ -99,6 +99,8 @@ export interface MetersMsg {
   audio: AudioFrame;
   values: number[]; // PARAM_COUNT effective param values, normalised 0…1
   motifA: number; motifB: number; morphT: number; holdRemaining: number; fps: number;
+  /** Design §4.5: normalised [orange, red] starts on the zoom and mirrorShift sliders (1 = never). */
+  zones: { zoom: [number, number]; mirrorShift: [number, number] };
   error?: string;
 }
 /** `free`: empty layer slots; `persistent`: false when IndexedDB is unavailable (shapes last for the session only). */

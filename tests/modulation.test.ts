@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'vitest';
-import { createModulation, gate, modulate, modulateNorm } from '../src/display/modulation';
+import { createModulation, gate, modulate, modulateNorm, type Geom, type Modulation } from '../src/display/modulation';
 import { idleFrame } from '../src/display/audio/dsp';
 import { PARAMS, PARAM_INDEX, fromNorm, paramDef, toNorm, type ParamId } from '../src/shared/params';
 import type { AudioFrame } from '../src/shared/protocol';
 import { defaultLook, defaultSession, type Look, type Session } from '../src/shared/state';
-import { mulberry32 } from '../src/shared/math';
+import { clamp01, mulberry32 } from '../src/shared/math';
 
 const frame = (o: Partial<AudioFrame> = {}): AudioFrame => ({ ...idleFrame(), silent: false, ...o });
 const noDrift = (): Session => ({ ...defaultSession(), autopilot: 0 });
@@ -186,5 +186,78 @@ describe('spin (B4.3)', () => {
       }
       expect(m.spinPhase).toBe(0);
     }
+  });
+});
+
+describe('the stop and the zones (design §4.4, §4.5)', () => {
+  const geom: Geom = { radius: 0.8, ax: 1, ay: 1, morphing: false };
+  /** No drift; nothing but zoom/mirrorShift grows the picture; zoom reacts fully to low. */
+  function quietLook(): Look {
+    const look = defaultLook();
+    for (const id of ['thickness', 'spikeAmp', 'warpAmt', 'tiltX', 'tiltY'] as const) {
+      look.params[id].base = 0;
+      look.params[id].react = 0;
+    }
+    look.params.zoom = { base: 1, react: 1, band: 'low', thr: 0, lock: false };
+    return look;
+  }
+  function run(look: Look, session: Session, fr: AudioFrame): Modulation {
+    const m = createModulation();
+    modulate(m, look, session, fr, 0, 1 / 60, geom);
+    return m;
+  }
+  const z = paramDef('zoom');
+  const ms = paramDef('mirrorShift');
+
+  test('sound stops at the red line; with the stop off it passes', () => {
+    const on = run(quietLook(), noDrift(), frame({ low: 1 })).values[PARAM_INDEX.zoom];
+    expect(on).toBeCloseTo(1.25, 3);
+    const off = run(quietLook(), { ...noDrift(), zoomStop: false }, frame({ low: 1 })).values[PARAM_INDEX.zoom];
+    expect(off).toBeCloseTo(fromNorm(z, clamp01(toNorm(z, 1) + 1)), 6);
+  });
+
+  test('the hand past red is never pulled back', () => {
+    const look = quietLook();
+    look.params.zoom.base = 1.5;
+    expect(run(look, noDrift(), frame({ low: 1 })).values[PARAM_INDEX.zoom]).toBe(1.5);
+  });
+
+  test('negative react still pulls in', () => {
+    const look = quietLook();
+    look.params.zoom.react = -1;
+    look.params.zoom.base = 1.5;
+    expect(run(look, noDrift(), frame({ low: 1 })).values[PARAM_INDEX.zoom]).toBeLessThan(1.5);
+  });
+
+  test('mirror shift stops where the ink touches, with zoom at its hand value', () => {
+    const look = quietLook();
+    look.params.zoom.react = 0;
+    look.options.mirrorY = true;
+    look.params.mirrorShift = { base: 0, react: 1, band: 'low', thr: 0, lock: false };
+    expect(run(look, noDrift(), frame({ low: 1 })).values[PARAM_INDEX.mirrorShift]).toBeCloseTo(0.2, 3);
+  });
+
+  test('zones use the picture at rest: they do not move with the kick', () => {
+    const quiet = run(quietLook(), noDrift(), frame({ low: 0 })).zones.zoom;
+    const kick = run(quietLook(), noDrift(), frame({ low: 1 })).zones.zoom;
+    expect(quiet[1]).toBeCloseTo(toNorm(z, 1.25), 3);
+    expect(kick).toEqual(quiet);
+    expect(quiet[0]).toBeLessThanOrEqual(quiet[1]);
+  });
+
+  test('no mirror → no mirror-shift zones; mirror → zones', () => {
+    expect(run(quietLook(), noDrift(), frame()).zones.mirrorShift).toEqual([1, 1]);
+    const look = quietLook();
+    look.options.mirrorY = true;
+    expect(run(look, noDrift(), frame()).zones.mirrorShift[1]).toBeCloseTo(toNorm(ms, 0.2), 3);
+  });
+
+  test('fallback and no geometry: no stop', () => {
+    const free = fromNorm(z, clamp01(toNorm(z, 1) + 1));
+    expect(run(quietLook(), { ...noDrift(), fallback: true }, frame({ low: 1 })).values[PARAM_INDEX.zoom]).toBeCloseTo(free, 6);
+    const m = createModulation();
+    modulate(m, quietLook(), noDrift(), frame({ low: 1 }), 0, 1 / 60);
+    expect(m.values[PARAM_INDEX.zoom]).toBeCloseTo(free, 6);
+    expect(m.zones.zoom).toEqual([1, 1]);
   });
 });

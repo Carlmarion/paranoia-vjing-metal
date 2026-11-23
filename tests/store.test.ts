@@ -164,6 +164,13 @@ describe('messages', () => {
     expect(m.state.look.options).toEqual({ meltMode: 2, mirrorX: true, mirrorY: true, hueJumpEvery: 8, hueJumpAmt: 0.5, holdBeats: 128, morphBeats: 4 });
   });
 
+  test('setSession zoomStop: a boolean is applied, anything else ignored', () => {
+    expect(fresh().state.session.zoomStop).toBe(true);
+    const m = apply(fresh(), { t: 'setSession', key: 'zoomStop', value: false });
+    expect(m.state.session.zoomStop).toBe(false);
+    expect(apply(m, { t: 'setSession', key: 'zoomStop', value: 1 }).state.session.zoomStop).toBe(false);
+  });
+
   test('setSession: every key', () => {
     const m = apply(fresh(),
       { t: 'setSession', key: 'autopilot', value: 3 }, { t: 'setSession', key: 'reactMaster', value: 1.5 },
@@ -171,10 +178,11 @@ describe('messages', () => {
       { t: 'setSession', key: 'order', value: 'sequential' }, { t: 'setSession', key: 'presetCycleMin', value: 5 },
       { t: 'setSession', key: 'frozen', value: true }, { t: 'setSession', key: 'fallback', value: true },
       { t: 'setSession', key: 'blackout', value: true }, { t: 'setSession', key: 'meltHold', value: true },
-      { t: 'setSession', key: 'holdPos', value: -1 }, { t: 'setSession', key: 'queued', value: 4 });
+      { t: 'setSession', key: 'holdPos', value: -1 }, { t: 'setSession', key: 'queued', value: 4 },
+      { t: 'setSession', key: 'zoomStop', value: false });
     expect(m.state.session).toEqual({
       autopilot: 1, reactMaster: 1.5, xfade: 8, autoAdvance: false, order: 'sequential', presetCycleMin: 5,
-      frozen: true, fallback: true, blackout: true, meltHold: true, holdPos: 0, queued: 4, live: false,
+      frozen: true, fallback: true, blackout: true, meltHold: true, holdPos: 0, queued: 4, live: false, zoomStop: false,
     });
     expect(apply(m, { t: 'setSession', key: 'queued', value: null }).state.session.queued).toBeNull();
   });

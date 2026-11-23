@@ -3,6 +3,7 @@ import { PARAMS, PARAM_COUNT, PARAM_INDEX, fromNorm, toNorm, type ParamDef } fro
 import { bandValue, type AudioFrame } from '../shared/protocol';
 import type { Look, ParamState, Session } from '../shared/state';
 import { clamp01, fract, valueNoise1D } from '../shared/math';
+import { limit, stop, type ReachIn, type ReachParam } from './reach';
 
 export const PHASE_WRAP = 1000;
 
@@ -39,10 +40,32 @@ export interface Modulation {
   wavePhase: number;
   /** Turns, 0…1: turns at the effective `spin` speed (turns/min); glides back upright while spin is fully off. */
   spinPhase: number;
+  /** Values with base + drift only (no sound), on each param's own scale. */
+  rest: Float32Array;
+  /** Design §4.5: normalised slider positions where orange and red start (1 = never). */
+  zones: Zones;
 }
 
+export type Zone = [orange: number, red: number];
+export interface Zones { zoom: Zone; mirrorShift: Zone; }
+
+/** What the stop and the zones need to know about the picture (design §4.2–4.3). */
+export interface Geom {
+  /** Ink radius of what is on screen: max of A and B during a melt. */
+  radius: number;
+  /** Window half-extents in units of its short side. */
+  ax: number; ay: number;
+  /** A melt is running (0 < morphT < 1). */
+  morphing: boolean;
+}
+
+const NO_ZONE: Zone = [1, 1];
+
 export function createModulation(): Modulation {
-  return { values: new Float32Array(PARAM_COUNT), norm: new Float32Array(PARAM_COUNT), warpPhase: 0, spikePhase: 0, wavePhase: 0, spinPhase: 0 };
+  return {
+    values: new Float32Array(PARAM_COUNT), norm: new Float32Array(PARAM_COUNT), warpPhase: 0, spikePhase: 0, wavePhase: 0, spinPhase: 0,
+    rest: new Float32Array(PARAM_COUNT), zones: { zoom: NO_ZONE, mirrorShift: NO_ZONE },
+  };
 }
 
 function wrapPhase(x: number): number {
@@ -61,7 +84,9 @@ export const SPIN_RETURN_TAU = 0.4;
  * @param look   the Look to render (store's renderLook: fallback and crossfade already applied)
  * @param driftT from the autopilot
  */
-export function modulate(m: Modulation, look: Look, session: Session, frame: AudioFrame, driftT: number, dt: number): void {
+export function modulate(
+  m: Modulation, look: Look, session: Session, frame: AudioFrame, driftT: number, dt: number, geom?: Geom,
+): void {
   const driftScale = session.fallback ? 0 : session.autopilot;
   for (let i = 0; i < PARAM_COUNT; i++) {
     const def = PARAMS[i];
@@ -69,6 +94,13 @@ export function modulate(m: Modulation, look: Look, session: Session, frame: Aud
     const u = modulateNorm(def, ps, i, bandValue(ps.band, frame), driftScale, session.reactMaster, driftT);
     m.norm[i] = u;
     m.values[i] = fromNorm(def, u);
+    m.rest[i] = fromNorm(def, modulateNorm(def, ps, i, 0, driftScale, session.reactMaster, driftT));
+  }
+  if (geom) {
+    if (session.zoomStop && !session.fallback) applyStop(m, look, geom);
+    m.zones = zones(m.rest, look, geom);
+  } else {
+    m.zones = { zoom: NO_ZONE, mirrorShift: NO_ZONE };
   }
   // Warp and spike phases are noise coordinates: wrapping them would make the shape jump, so they
   // run freely (the shader's integer hash stays exact). The wave phase feeds a sine and wraps seamlessly.
@@ -79,6 +111,55 @@ export function modulate(m: Modulation, look: Look, session: Session, frame: Aud
   m.spinPhase = spin.base === 0 && spin.react === 0
     ? glideUpright(m.spinPhase, dt)
     : fract(m.spinPhase + (m.values[I_SPIN] / 60) * dt);
+}
+
+const I_ZOOM = PARAM_INDEX.zoom;
+const I_MIRROR_SHIFT = PARAM_INDEX.mirrorShift;
+const ZOOM = PARAMS[I_ZOOM];
+const MIRROR_SHIFT = PARAMS[I_MIRROR_SHIFT];
+
+/** The reach inputs for a set of param values (own scales). */
+function reachIn(v: Float32Array, look: Look, geom: Geom): ReachIn {
+  const o = look.options;
+  const meltBulge = o.meltMode === 1 && geom.morphing ? v[PARAM_INDEX.meltK] / 4 : 0;
+  return {
+    zoom: v[I_ZOOM], mirrorShift: v[I_MIRROR_SHIFT], mirrorX: o.mirrorX, mirrorY: o.mirrorY,
+    tiltX: v[PARAM_INDEX.tiltX], tiltY: v[PARAM_INDEX.tiltY], thickness: v[PARAM_INDEX.thickness],
+    spikeAmp: v[PARAM_INDEX.spikeAmp], warpAmt: v[PARAM_INDEX.warpAmt], glow: v[PARAM_INDEX.glow],
+    glowWidth: v[PARAM_INDEX.glowWidth], brightness: v[PARAM_INDEX.brightness], meltBulge,
+    radius: geom.radius, ax: geom.ax, ay: geom.ay,
+  };
+}
+
+const limitOf = (i: ReachIn, p: ReachParam, kind: 'ink' | 'glow'): number => {
+  const def = p === 'zoom' ? ZOOM : MIRROR_SHIFT;
+  return limit(i, p, kind, def.min, def.max);
+};
+
+/** Design §4.4, fixed order: mirror shift (zoom at its hand value), then zoom (with the final mirror shift). */
+function applyStop(m: Modulation, look: Look, geom: Geom): void {
+  const zoomHand = look.params.zoom.base;
+  if (look.options.mirrorX || look.options.mirrorY) {
+    const lim = limitOf({ ...reachIn(m.values, look, geom), zoom: zoomHand }, 'mirrorShift', 'ink');
+    setValue(m, I_MIRROR_SHIFT, stop(look.params.mirrorShift.base, m.values[I_MIRROR_SHIFT], lim));
+  }
+  const lim = limitOf(reachIn(m.values, look, geom), 'zoom', 'ink');
+  setValue(m, I_ZOOM, stop(zoomHand, m.values[I_ZOOM], lim));
+}
+
+function setValue(m: Modulation, i: number, v: number): void {
+  m.values[i] = v;
+  m.norm[i] = clamp01(toNorm(PARAMS[i], v));
+}
+
+/** Design §4.5: the other params at rest, so the zones do not flicker with the kick. */
+function zones(rest: Float32Array, look: Look, geom: Geom): Zones {
+  const i = reachIn(rest, look, geom);
+  const zone = (p: ReachParam, def: typeof ZOOM | typeof MIRROR_SHIFT): Zone => [
+    clamp01(toNorm(def, limitOf(i, p, 'glow'))), clamp01(toNorm(def, limitOf(i, p, 'ink'))),
+  ];
+  const mirrored = look.options.mirrorX || look.options.mirrorY;
+  return { zoom: zone('zoom', ZOOM), mirrorShift: mirrored ? zone('mirrorShift', MIRROR_SHIFT) : NO_ZONE };
 }
 
 /** Ease a 0…1 turn phase toward the nearest whole turn (shortest way); snaps to exactly 0 when close. */

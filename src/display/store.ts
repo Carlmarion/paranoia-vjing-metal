@@ -167,7 +167,7 @@ function setSession(model: Model, key: unknown, value: unknown, env: Env): Model
       if (isNum(value)) v = clamp(value, r[0], r[1]);
       break;
     }
-    case 'autoAdvance': case 'frozen': case 'fallback': case 'blackout': case 'meltHold':
+    case 'autoAdvance': case 'frozen': case 'fallback': case 'blackout': case 'meltHold': case 'zoomStop':
       if (typeof value === 'boolean') v = value;
       break;
     case 'order': if (ORDERS.includes(value as never)) v = value as Session['order']; break;

@@ -2,7 +2,8 @@
 import { PARAM_INDEX } from '../shared/params';
 import { clamp, streamRng } from '../shared/math';
 import { dateSeed, getStorage } from '../shared/state';
-import { DISPLAY_MSG_TYPES, createBroadcastTransport, type DeviceInfo, type Manifest, type Msg } from '../shared/protocol';
+import { DISPLAY_MSG_TYPES, MAX_LAYERS, createBroadcastTransport, type DeviceInfo, type Manifest, type Msg } from '../shared/protocol';
+import { inkRadius } from '../shared/sdf';
 import { drawStrokes } from '../shared/raster';
 import type { Stroke } from '../shared/strokes';
 import { keyAction, isTyping } from '../shared/keys';
@@ -19,7 +20,7 @@ import { WorkerBaker } from './baker';
 import { openShapeDB } from './shapedb';
 import { Sequencer } from './sequencer';
 import { Autopilot, PRESET_CYCLE_FADE_S } from './autopilot';
-import { createModulation, modulate } from './modulation';
+import { createModulation, modulate, type Geom } from './modulation';
 
 const STATE_SEND_MS = 100; // ≤ 10×/s
 const METERS_SEND_MS = 50; // 20×/s
@@ -57,6 +58,24 @@ const bakedOnly: ShapeLookup = {
   isShape: (l) => Number.isInteger(l) && l >= 0 && l < (manifest?.count ?? 0),
   drawnLayer: () => null,
 };
+/** Design §4.2: ink radius per texture layer, kept current on every upload. */
+const radius = new Float32Array(MAX_LAYERS);
+function measureAtlas(buf: ArrayBuffer, m: Manifest): void {
+  const n = m.cell * m.cell;
+  for (let l = 0; l < m.count && l < MAX_LAYERS; l++) radius[l] = inkRadius(new Uint16Array(buf, l * n * 2, n), m.cell);
+}
+function uploadLayer(layer: number, half: Uint16Array): void {
+  if (manifest && layer >= 0 && layer < MAX_LAYERS) radius[layer] = inkRadius(half, manifest.cell);
+  renderer?.uploadLayer(layer, half);
+}
+function geomOf(motifA: number, motifB: number, morphT: number): Geom {
+  const morphing = morphT > 0 && morphT < 1;
+  const short = Math.min(canvas.width, canvas.height);
+  return {
+    radius: morphing ? Math.max(radius[motifA] ?? 0, radius[motifB] ?? 0) : radius[motifA] ?? 0,
+    ax: canvas.width / short, ay: canvas.height / short, morphing,
+  };
+}
 const bakedPool = (): number[] => Array.from({ length: manifest?.count ?? 0 }, (_, i) => i);
 let fatal: string | null = null;
 let audioError: string | null = null;
@@ -167,7 +186,7 @@ async function startLibrary(m: Manifest): Promise<void> {
     bakedNames: m.motifs.map((x) => x.file.replace(/\.png$/i, '')),
     db: await openShapeDB(),
     bake: { library: new WorkerBaker(m.cell), live: new WorkerBaker(m.cell) },
-    upload: (layer, half) => renderer?.uploadLayer(layer, half),
+    upload: uploadLayer,
     thumb: renderThumb,
     storage,
     send: (msg) => transport.send(msg),
@@ -266,18 +285,18 @@ function frame(nowMs: number): void {
   if (ap.recall !== null) model = recallPreset(model, ap.recall, PRESET_CYCLE_FADE_S);
   const look = renderLook(model);
   const session = model.state.session;
-  modulate(mod, look, session, audio, ap.driftT, dt);
-  lastLinger = mod.values[PARAM_INDEX.linger];
-
-  const target = session.blackout ? 0 : 1;
-  master = clamp(master + Math.sign(target - master) * (dt / BLACKOUT_FADE_S), 0, 1);
-
   const fb = session.fallback;
   const motifA = fb ? 0 : so.motifA;
   const motifB = fb ? 0 : so.motifB;
   const morphT = fb ? 0 : so.morphT;
 
   resize();
+  modulate(mod, look, session, audio, ap.driftT, dt, geomOf(motifA, motifB, morphT));
+  lastLinger = mod.values[PARAM_INDEX.linger];
+
+  const target = session.blackout ? 0 : 1;
+  master = clamp(master + Math.sign(target - master) * (dt / BLACKOUT_FADE_S), 0, 1);
+
   if (renderer) {
     renderer.draw({
       params: mod.values, res: [canvas.width, canvas.height],
@@ -295,7 +314,7 @@ function frame(nowMs: number): void {
     lastMetersMs = nowMs;
     transport.send({
       t: 'meters', audio, values: Array.from(mod.norm), motifA, motifB, morphT,
-      holdRemaining: so.holdRemaining, fps, ...(error ? { error } : {}),
+      holdRemaining: so.holdRemaining, fps, zones: mod.zones, ...(error ? { error } : {}),
     });
   }
   debug.update(dt, {
@@ -323,6 +342,7 @@ async function boot(): Promise<void> {
       const res = await fetch(assetUrl('sdf/atlas.bin'));
       if (!res.ok) throw new Error(`sdf/atlas.bin: HTTP ${res.status}`);
       atlas = await res.arrayBuffer();
+      measureAtlas(atlas, manifest);
       initRenderer();
       void startLibrary(manifest).catch((e: unknown) => { console.error('library', e); });
     } catch (e) {
