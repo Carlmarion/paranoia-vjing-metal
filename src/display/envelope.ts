@@ -6,8 +6,11 @@ export interface EnvState { c: number; y: number; }
 
 const ease = (tau: number, dt: number): number => (tau <= 0 ? 1 : 1 - Math.exp(-dt / tau));
 
-/** One frame. `g` = the B4.1 gate value (0…1). Mutates `s`. Neutral settings give `y === g`. */
-export function envStep(s: EnvState, g: number, env: Env, dt: number): void {
+/**
+ * One frame. `g` = the B4.1 gate value (0…1). Mutates `s`; returns `x`, the input after fatigue (for stage display).
+ * Neutral settings give `y === g`.
+ */
+export function envStep(s: EnvState, g: number, env: Env, dt: number): number {
   const gate = g > 0 ? (g < 1 ? g : 1) : 0;
   // fatigue: use the charge before draining it, so a hit's first frame is full at any frame rate
   const x = gate * s.c;
@@ -17,6 +20,20 @@ export function envStep(s: EnvState, g: number, env: Env, dt: number): void {
   // attack / release
   const tau = x > s.y ? env.attack : env.release;
   s.y = tau <= 0 ? x : s.y + (x - s.y) * ease(tau, dt);
+  return x;
+}
+
+export type EnvStage = 0 | 1 | 2 | 3;
+/** Below this, the effect counts as idle. */
+const IDLE = 0.01;
+const NEAR = 0.95;
+
+/** 0 idle, 1 rising, 2 holding, 3 falling — from the input after fatigue `x` and the output `y`. */
+export function envStage(x: number, y: number): EnvStage {
+  if (x < IDLE && y < IDLE) return 0;
+  if (y < NEAR * x) return 1;
+  if (x < NEAR * y) return 3;
+  return 2;
 }
 
 /** Each section of the drawn curve spans this many of its time constants. */

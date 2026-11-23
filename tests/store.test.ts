@@ -164,6 +164,16 @@ describe('messages', () => {
     expect(m.state.look.options).toEqual({ meltMode: 2, mirrorX: true, mirrorY: true, hueJumpEvery: 8, hueJumpAmt: 0.5, holdBeats: 128, morphBeats: 4 });
   });
 
+  test('setEnv: clamped to its range; bad group, key or value leaves the model untouched', () => {
+    const m = apply(fresh(), { t: 'setEnv', group: 'shape', key: 'release', value: 99 }, { t: 'setEnv', group: 'line', key: 'sustain', value: 0.3 });
+    expect(m.state.look.env.shape.release).toBe(20);
+    expect(m.state.look.env.line.sustain).toBe(0.3);
+    for (const bad of [
+      { t: 'setEnv', group: 'inner', key: 'release', value: 1 }, { t: 'setEnv', group: 'shape', key: 'hold', value: 1 },
+      { t: 'setEnv', group: 'shape', key: 'attack', value: 'x' }, { t: 'setEnv', group: 'shape', key: 'attack', value: NaN },
+    ]) expect(reduce(m, bad, env()).model).toBe(m);
+  });
+
   test('setSession zoomStop: a boolean is applied, anything else ignored', () => {
     expect(fresh().state.session.zoomStop).toBe(true);
     const m = apply(fresh(), { t: 'setSession', key: 'zoomStop', value: false });

@@ -3,10 +3,10 @@
 import { GROUPS, PARAMS, type Group, type ParamId } from '../shared/params';
 import type { ControlMsg, LiveMsg, ShapeMsg } from '../shared/protocol';
 import {
-  BANDS, CALIB_RANGES, HOLD_BEATS, HUE_JUMP_AMT_RANGE, HUE_JUMP_EVERY, MELT_MODES, MORPH_BEATS, ORDERS,
+  BANDS, CALIB_RANGES, ENV_KEYS, ENV_RANGES, HOLD_BEATS, HUE_JUMP_AMT_RANGE, HUE_JUMP_EVERY, MELT_MODES, MORPH_BEATS, ORDERS,
   PRESET_CYCLE_MIN, PRESET_SLOTS, REACT_RANGE, SESSION_RANGES, STORAGE_KEYS, THR_RANGE,
-  defaultState, fallbackLook, loadPersisted, migratePresets, safeSet, serialiseCalib, serialiseLook,
-  serialisePresets, type Calib, type Look, type LookOptions, type Session, type State, type StorageLike,
+  defaultState, fallbackLook, isEnvGroup, loadPersisted, migratePresets, safeSet, serialiseCalib, serialiseLook,
+  serialisePresets, type Calib, type Env as Envelope, type Look, type LookOptions, type Session, type State, type StorageLike,
 } from '../shared/state';
 import { clamp, type Rng } from '../shared/math';
 import type { SeqCommand } from './sequencer';
@@ -142,6 +142,15 @@ function setParam(model: Model, id: unknown, field: unknown, value: unknown): Mo
   if (next === cur) return model;
   const look = model.state.look;
   return setLook(model, { ...look, params: { ...look.params, [pid]: next } });
+}
+
+function setEnv(model: Model, group: unknown, key: unknown, value: unknown): Model {
+  if (!isEnvGroup(group) || !ENV_KEYS.includes(key as keyof Envelope) || !isNum(value)) return model;
+  const k = key as keyof Envelope;
+  const r = ENV_RANGES[k];
+  const look = model.state.look;
+  const env = { ...look.env, [group]: { ...look.env[group], [k]: clamp(value, r[0], r[1]) } };
+  return setLook(model, { ...look, env });
 }
 
 function setOption(model: Model, key: unknown, value: unknown): Model {
@@ -307,6 +316,7 @@ export function reduce(model: Model, msg: unknown, env: Env): Result {
     case 'hello': return { model, effects: [{ t: 'sendState' }] };
     case 'setParam': return { model: setParam(model, m.id, m.field, m.value), effects: [] };
     case 'setOption': return { model: setOption(model, m.key, m.value), effects: [] };
+    case 'setEnv': return { model: setEnv(model, m.group, m.key, m.value), effects: [] };
     case 'setSession': return { model: setSession(model, m.key, m.value, env), effects: [] };
     case 'setCalib': return setCalib(model, m.key, m.value);
     case 'cmd': return cmd(model, m.name, m.arg, env);

@@ -1,6 +1,6 @@
 // Messages between Display and Control (B9) and the Transport that carries them.
 import type { ParamId, Band } from './params';
-import type { State, LookOptions, Session, Calib } from './state';
+import type { State, LookOptions, Session, Calib, Env, EnvGroup } from './state';
 import type { Stroke } from './strokes';
 
 /** B6.4 */
@@ -89,6 +89,7 @@ export type ControlMsg =
   | { t: 'setSession'; key: keyof Session; value: number | boolean | string | null }
   | { t: 'setCalib'; key: keyof Calib; value: number | string | null }
   | { t: 'cmd'; name: CmdName; arg?: unknown }
+  | { t: 'setEnv'; group: EnvGroup; key: keyof Env; value: number }
   | ShapeMsg
   | LiveMsg;
 
@@ -101,6 +102,8 @@ export interface MetersMsg {
   motifA: number; motifB: number; morphT: number; holdRemaining: number; fps: number;
   /** Design §4.5: normalised [orange, red] starts on the zoom and mirrorShift sliders (1 = never). */
   zones: { zoom: [number, number]; mirrorShift: [number, number] };
+  /** Design §5.4: per envelope group, the level and stage (0 idle, 1 rising, 2 holding, 3 falling) of its lead param. */
+  env: Record<EnvGroup, { level: number; stage: 0 | 1 | 2 | 3 }>;
   error?: string;
 }
 /** `free`: empty layer slots; `persistent`: false when IndexedDB is unavailable (shapes last for the session only). */

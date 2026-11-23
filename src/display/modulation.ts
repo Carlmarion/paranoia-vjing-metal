@@ -4,6 +4,8 @@ import { bandValue, type AudioFrame } from '../shared/protocol';
 import type { Look, ParamState, Session } from '../shared/state';
 import { clamp01, fract, valueNoise1D } from '../shared/math';
 import { limit, stop, type ReachIn, type ReachParam } from './reach';
+import { envStage, envStep, type EnvStage, type EnvState } from './envelope';
+import { isEnvGroup, perEnvGroup, type EnvGroup } from '../shared/state';
 
 export const PHASE_WRAP = 1000;
 
@@ -20,12 +22,20 @@ export function modulateNorm(
   def: ParamDef, ps: ParamState, index: number, bandVal: number,
   driftScale: number, reactMaster: number, driftT: number,
 ): number {
+  return normAt(def, ps, index, gate(bandVal, ps.thr), driftScale, reactMaster, driftT);
+}
+
+/** B4.1 with the sound `level` already decided (the gate, or the envelope output for shape, line and colour). */
+function normAt(
+  def: ParamDef, ps: ParamState, index: number, level: number,
+  driftScale: number, reactMaster: number, driftT: number,
+): number {
   const uBase = toNorm(def, ps.base);
   const drift =
     ps.lock || def.driftPeriod === null || def.driftAmp === 0
       ? 0
       : driftScale * def.driftAmp * (valueNoise1D(index * 37.1 + driftT / def.driftPeriod) * 2 - 1);
-  const u = uBase + drift + reactMaster * ps.react * gate(bandVal, ps.thr);
+  const u = uBase + drift + reactMaster * ps.react * level;
   return def.scale === 'wrap' ? fract(u) : clamp01(u);
 }
 
@@ -40,11 +50,17 @@ export interface Modulation {
   wavePhase: number;
   /** Turns, 0…1: turns at the effective `spin` speed (turns/min); glides back upright while spin is fully off. */
   spinPhase: number;
+  /** Design §5.2: envelope state per param (used by the shape, line and colour groups). */
+  env: EnvState[];
+  /** Per envelope group: the reacting param with the highest output, for the dashboard's live dot. */
+  envLead: Record<EnvGroup, EnvLead>;
   /** Values with base + drift only (no sound), on each param's own scale. */
   rest: Float32Array;
   /** Design §4.5: normalised slider positions where orange and red start (1 = never). */
   zones: Zones;
 }
+
+export interface EnvLead { level: number; stage: EnvStage; }
 
 export type Zone = [orange: number, red: number];
 export interface Zones { zoom: Zone; mirrorShift: Zone; }
@@ -60,11 +76,13 @@ export interface Geom {
 }
 
 const NO_ZONE: Zone = [1, 1];
+const idleLead = (): EnvLead => ({ level: 0, stage: 0 });
 
 export function createModulation(): Modulation {
   return {
     values: new Float32Array(PARAM_COUNT), norm: new Float32Array(PARAM_COUNT), warpPhase: 0, spikePhase: 0, wavePhase: 0, spinPhase: 0,
     rest: new Float32Array(PARAM_COUNT), zones: { zoom: NO_ZONE, mirrorShift: NO_ZONE },
+    env: Array.from({ length: PARAM_COUNT }, () => ({ c: 1, y: 0 })), envLead: perEnvGroup(idleLead),
   };
 }
 
@@ -88,13 +106,22 @@ export function modulate(
   m: Modulation, look: Look, session: Session, frame: AudioFrame, driftT: number, dt: number, geom?: Geom,
 ): void {
   const driftScale = session.fallback ? 0 : session.autopilot;
+  m.envLead = perEnvGroup(idleLead);
   for (let i = 0; i < PARAM_COUNT; i++) {
     const def = PARAMS[i];
     const ps = look.params[def.id];
-    const u = modulateNorm(def, ps, i, bandValue(ps.band, frame), driftScale, session.reactMaster, driftT);
+    let level = gate(bandValue(ps.band, frame), ps.thr);
+    if (isEnvGroup(def.group)) {
+      const s = m.env[i];
+      const x = envStep(s, level, look.env[def.group], dt);
+      level = s.y;
+      const lead = m.envLead[def.group];
+      if (ps.react !== 0 && ps.band !== 'none' && s.y >= lead.level) m.envLead[def.group] = { level: s.y, stage: envStage(x, s.y) };
+    }
+    const u = normAt(def, ps, i, level, driftScale, session.reactMaster, driftT);
     m.norm[i] = u;
     m.values[i] = fromNorm(def, u);
-    m.rest[i] = fromNorm(def, modulateNorm(def, ps, i, 0, driftScale, session.reactMaster, driftT));
+    m.rest[i] = fromNorm(def, normAt(def, ps, i, 0, driftScale, session.reactMaster, driftT));
   }
   if (geom) {
     if (session.zoomStop && !session.fallback) applyStop(m, look, geom);

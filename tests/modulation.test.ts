@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { createModulation, gate, modulate, modulateNorm, type Geom, type Modulation } from '../src/display/modulation';
 import { idleFrame } from '../src/display/audio/dsp';
 import { PARAMS, PARAM_INDEX, fromNorm, paramDef, toNorm, type ParamId } from '../src/shared/params';
-import type { AudioFrame } from '../src/shared/protocol';
+import { bandValue, type AudioFrame } from '../src/shared/protocol';
 import { defaultLook, defaultSession, type Look, type Session } from '../src/shared/state';
 import { clamp01, mulberry32 } from '../src/shared/math';
 
@@ -259,5 +259,72 @@ describe('the stop and the zones (design §4.4, §4.5)', () => {
     modulate(m, quietLook(), noDrift(), frame({ low: 1 }), 0, 1 / 60);
     expect(m.values[PARAM_INDEX.zoom]).toBeCloseTo(free, 6);
     expect(m.zones.zoom).toEqual([1, 1]);
+  });
+});
+
+describe('envelope stage (design §5.2)', () => {
+  const kickLook = (): Look => {
+    const look = defaultLook();
+    look.params.zoom = { base: 0.85, react: 0.5, band: 'low', thr: 0, lock: false };
+    look.params.waveAmt = { base: 0.4, react: 0.3, band: 'low', thr: 0, lock: false };
+    return look;
+  };
+
+  test('neutral envelopes: 600 random frames equal the B4.1 formula exactly', () => {
+    const rng = mulberry32(17);
+    const look = defaultLook();
+    for (const def of PARAMS) {
+      look.params[def.id].react = rng() * 2 - 1;
+      look.params[def.id].band = (['low', 'mid', 'high', 'beat', 'energy', 'none'] as const)[Math.floor(rng() * 6)];
+      look.params[def.id].thr = rng() * 0.5;
+    }
+    const session: Session = { ...defaultSession(), zoomStop: false };
+    const m = createModulation();
+    for (let f = 0; f < 600; f++) {
+      const fr = frame({ low: rng(), mid: rng(), high: rng(), beat: rng(), energy: rng() });
+      const dt = 1 / (30 + rng() * 90);
+      modulate(m, look, session, fr, f * 0.01, dt);
+      for (let i = 0; i < PARAMS.length; i++) {
+        const def = PARAMS[i];
+        const ps = look.params[def.id];
+        const u = modulateNorm(def, ps, i, bandValue(ps.band, fr), session.autopilot, session.reactMaster, f * 0.01);
+        expect(m.norm[i]).toBe(Math.fround(u));
+      }
+    }
+  });
+
+  test('a shape tail lingers after the sound stops; inner has no envelope', () => {
+    const look = kickLook();
+    look.env.shape = { attack: 0, sustain: 1, decay: 1, release: 2 };
+    const m = createModulation();
+    for (let i = 0; i < 30; i++) modulate(m, look, noDrift(), frame({ low: 1 }), 0, 1 / 60);
+    for (let i = 0; i < 60; i++) modulate(m, look, noDrift(), frame({ low: 0 }), 0, 1 / 60);
+    expect(m.values[PARAM_INDEX.zoom]).toBeGreaterThan(0.86);
+    expect(m.values[PARAM_INDEX.waveAmt]).toBeCloseTo(0.4, 6);
+  });
+
+  test('the lead of a group reports its level and stage', () => {
+    const look = kickLook();
+    look.env.shape = { attack: 0.5, sustain: 1, decay: 1, release: 1 };
+    const m = createModulation();
+    modulate(m, look, noDrift(), frame({ low: 1 }), 0, 1 / 60);
+    expect(m.envLead.shape.stage).toBe(1);
+    for (let i = 0; i < 600; i++) modulate(m, look, noDrift(), frame({ low: 1 }), 0, 1 / 60);
+    expect(m.envLead.shape.stage).toBe(2);
+    expect(m.envLead.shape.level).toBeGreaterThan(0.99);
+    modulate(m, look, noDrift(), frame({ low: 0 }), 0, 1 / 60);
+    expect(m.envLead.shape.stage).toBe(3);
+    for (let i = 0; i < 1200; i++) modulate(m, look, noDrift(), frame({ low: 0 }), 0, 1 / 60);
+    expect(m.envLead.shape.stage).toBe(0);
+    expect((m.envLead as Record<string, unknown>).inner).toBeUndefined();
+  });
+
+  test('params with react 0 or band none do not lead', () => {
+    const look = defaultLook();
+    for (const def of PARAMS) look.params[def.id].react = 0;
+    look.params.thickness = { base: 0, react: 0, band: 'low', thr: 0, lock: false };
+    const m = createModulation();
+    modulate(m, look, noDrift(), frame({ low: 1 }), 0, 1 / 60);
+    expect(m.envLead.line).toEqual({ level: 0, stage: 0 });
   });
 });

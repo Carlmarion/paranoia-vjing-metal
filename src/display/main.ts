@@ -314,7 +314,7 @@ function frame(nowMs: number): void {
     lastMetersMs = nowMs;
     transport.send({
       t: 'meters', audio, values: Array.from(mod.norm), motifA, motifB, morphT,
-      holdRemaining: so.holdRemaining, fps, zones: mod.zones, ...(error ? { error } : {}),
+      holdRemaining: so.holdRemaining, fps, zones: mod.zones, env: mod.envLead, ...(error ? { error } : {}),
     });
   }
   debug.update(dt, {
