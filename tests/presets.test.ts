@@ -4,7 +4,7 @@ import {
   randomize, renamePreset, deletePreset, resetLook, savePreset, startFade, stepFade, UNDO_SIZE,
 } from '../src/display/presets';
 import { GROUPS, PARAMS, paramDef } from '../src/shared/params';
-import { defaultLook, defaultOptions, emptyPresets, migratePresets, type Look } from '../src/shared/state';
+import { ENV_GROUPS, defaultLook, defaultOptions, emptyPresets, migratePresets, neutralEnv, type Look } from '../src/shared/state';
 import { mulberry32 } from '../src/shared/math';
 
 const NOW = new Date(2026, 10, 19, 21, 5, 9).getTime();
@@ -251,5 +251,45 @@ describe('undo', () => {
     for (let i = 0; i < 40; i++) ring = pushUndo(ring, defaultLook());
     expect(ring.length).toBe(UNDO_SIZE);
     expect(popUndo([]).look).toBeNull();
+  });
+});
+
+describe('envelopes in the Look (design §5.3)', () => {
+  const shaped = (): Look => {
+    const l = defaultLook();
+    l.env.shape = { attack: 1, sustain: 0.2, decay: 4, release: 10 };
+    l.env.line = { attack: 0.5, sustain: 0.6, decay: 2, release: 3 };
+    return l;
+  };
+
+  test('crossfade: endpoints exact, midpoint linear', () => {
+    const a = defaultLook();
+    const b = shaped();
+    expect(lerpLook(a, b, 1).env).toEqual(b.env);
+    const m = lerpLook(a, b, 0.5);
+    expect(m.env.shape).toEqual({ attack: 0.5, sustain: 0.6, decay: 2.5, release: 5 });
+  });
+
+  test('cloneLook deep-copies env', () => {
+    const a = shaped();
+    const c = cloneLook(a);
+    c.env.shape.attack = 0;
+    expect(a.env.shape.attack).toBe(1);
+  });
+
+  test('randomize and mutate leave env alone', () => {
+    const a = shaped();
+    expect(randomize(a, mulberry32(1)).env).toEqual(a.env);
+    expect(mutate(a, mulberry32(1)).env).toEqual(a.env);
+  });
+
+  test('reset of a group resets that envelope only; full reset all three', () => {
+    const a = shaped();
+    const r = resetLook(a, 'line');
+    expect(r.env.line).toEqual(neutralEnv());
+    expect(r.env.shape).toEqual(a.env.shape);
+    const all = resetLook(a);
+    for (const g of ENV_GROUPS) expect(all.env[g]).toEqual(neutralEnv());
+    expect(resetLook(a, 'inner').env).toEqual(a.env);
   });
 });

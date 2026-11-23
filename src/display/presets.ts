@@ -1,7 +1,8 @@
 // B8 — preset slots, crossfade, randomize, mutate, reset, undo, export/import. Pure.
 import { PARAMS, fromNorm, toNorm, type Band, type Group, type ParamId } from '../shared/params';
 import {
-  PRESET_SLOTS, REACT_RANGE, THR_RANGE, defaultOptions, defaultParamState, migratePresets, serialisePresets,
+  ENV_KEYS, PRESET_SLOTS, REACT_RANGE, THR_RANGE, defaultOptions, defaultParamState, isEnvGroup, migratePresets,
+  neutralEnv, neutralEnvs, perEnvGroup, serialisePresets, type Env,
   type Look, type ParamState, type Preset,
 } from '../shared/state';
 import { clamp, clamp01, fract, gaussian, randInt, type Rng } from '../shared/math';
@@ -12,7 +13,11 @@ export const UNDO_FADE_S = 1;
 export function cloneLook(l: Look): Look {
   const params = {} as Record<ParamId, ParamState>;
   for (const def of PARAMS) params[def.id] = { ...l.params[def.id] };
-  return { v: l.v, params, options: { ...l.options } };
+  return { v: l.v, params, options: { ...l.options }, env: cloneEnvs(l.env) };
+}
+
+function cloneEnvs(e: Look['env']): Look['env'] {
+  return perEnvGroup((g) => ({ ...e[g] }));
 }
 
 // ---------- slots ----------
@@ -104,7 +109,13 @@ export function lerpLook(a: Look, b: Look, k: number): Look {
       lock: pb.lock,
     };
   }
-  return { v: b.v, params, options: b.options };
+  const env = perEnvGroup((g) => {
+    const ea = a.env[g], eb = b.env[g];
+    const e = {} as Env;
+    for (const key of ENV_KEYS) e[key] = ea[key] + (eb[key] - ea[key]) * k;
+    return e;
+  });
+  return { v: b.v, params, options: b.options, env };
 }
 
 /** A crossfade from `from` towards the live target (state.look). */
@@ -174,7 +185,12 @@ export function resetLook(look: Look, group?: Group): Look {
     if (group && def.group !== group) continue;
     out.params[def.id] = { ...defaultParamState(def), lock: out.params[def.id].lock };
   }
-  if (!group) out.options = defaultOptions();
+  if (!group) {
+    out.options = defaultOptions();
+    out.env = neutralEnvs();
+  } else if (isEnvGroup(group)) {
+    out.env[group] = neutralEnv();
+  }
   return out;
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { fromNorm, paramDef, toNorm } from '../src/shared/params';
-import { LOOK_VERSION, defaultLook, migrateLook, serialiseLook } from '../src/shared/state';
+import { ENV_GROUPS, LOOK_VERSION, defaultLook, migrateLook, neutralEnv, serialiseLook } from '../src/shared/state';
 import { clamp, clamp01 } from '../src/shared/math';
 
 describe('Look v2 zoom migration (design §4.1)', () => {
@@ -30,5 +30,17 @@ describe('Look v2 zoom migration (design §4.1)', () => {
     expect(defaultLook().params.zoom.react).toBe(0.034);
     expect(paramDef('zoom').scale).toBe('log');
     expect(paramDef('zoom').max).toBe(3);
+  });
+});
+
+describe('Look.env migration (design §5.3)', () => {
+  test('a Look without env gets neutral envelopes', () => {
+    const look = migrateLook({ params: {} });
+    for (const g of ENV_GROUPS) expect(look.env[g]).toEqual(neutralEnv());
+  });
+
+  test('out-of-range numbers are clamped, wrong types fall back', () => {
+    const look = migrateLook({ env: { shape: { attack: 9, sustain: -1, decay: 0, release: 'x' } } });
+    expect(look.env.shape).toEqual({ attack: 2, sustain: 0, decay: 0.05, release: 0 });
   });
 });

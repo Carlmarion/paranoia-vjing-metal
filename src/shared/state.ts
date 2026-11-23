@@ -21,11 +21,36 @@ export interface LookOptions {
   morphBeats: MorphBeats;
 }
 
+/** Design §5: the groups that have a reaction envelope (melt and inner react directly). */
+export type EnvGroup = 'shape' | 'line' | 'colour';
+export const ENV_GROUPS: EnvGroup[] = ['shape', 'line', 'colour'];
+export const isEnvGroup = (g: unknown): g is EnvGroup => ENV_GROUPS.includes(g as EnvGroup);
+
+/** One value per envelope group. */
+export function perEnvGroup<T>(f: (g: EnvGroup) => T): Record<EnvGroup, T> {
+  return { shape: f('shape'), line: f('line'), colour: f('colour') };
+}
+
+/** attack, decay, release in seconds; sustain 0…1 (1 = no fatigue). */
+export interface Env { attack: number; sustain: number; decay: number; release: number; }
+export const ENV_RANGES = {
+  attack: [0, 2], sustain: [0, 1], decay: [0.05, 10], release: [0, 20],
+} as const satisfies Record<keyof Env, readonly [number, number]>;
+export const ENV_KEYS = Object.keys(ENV_RANGES) as (keyof Env)[];
+
+/** Returns its input exactly: old Looks render as before. */
+export function neutralEnv(): Env { return { attack: 0, sustain: 1, decay: 1, release: 0 }; }
+
 /** Current Look format. v2: zoom is log 0.5…3 (react converted from the v1 lin 0.5…1.4 range). */
 export const LOOK_VERSION = 2;
 
 /** A Look is what a preset stores. */
-export interface Look { v: typeof LOOK_VERSION; params: Record<ParamId, ParamState>; options: LookOptions; }
+export interface Look {
+  v: typeof LOOK_VERSION;
+  params: Record<ParamId, ParamState>;
+  options: LookOptions;
+  env: Record<EnvGroup, Env>;
+}
 
 export type Order = 'random' | 'sequential';
 export type PresetCycleMin = 0 | 2 | 5 | 10;
@@ -109,7 +134,11 @@ export function defaultOptions(): LookOptions {
 export function defaultLook(): Look {
   const params = {} as Record<ParamId, ParamState>;
   for (const def of PARAMS) params[def.id] = defaultParamState(def);
-  return { v: LOOK_VERSION, params, options: defaultOptions() };
+  return { v: LOOK_VERSION, params, options: defaultOptions(), env: neutralEnvs() };
+}
+
+export function neutralEnvs(): Record<EnvGroup, Env> {
+  return perEnvGroup(neutralEnv);
 }
 
 /** B7.5 fallback: table defaults, react zero except zoom and brightness. */
@@ -197,6 +226,23 @@ export function migrateZoomReact(reactOld: number, base: number): number {
   return clamp(Math.sign(push) * r, REACT_RANGE[0], REACT_RANGE[1]);
 }
 
+export function migrateEnv(v: unknown): Env {
+  const d = neutralEnv();
+  if (!isObj(v)) return d;
+  const r = ENV_RANGES;
+  return {
+    attack: num(v.attack, r.attack[0], r.attack[1], d.attack),
+    sustain: num(v.sustain, r.sustain[0], r.sustain[1], d.sustain),
+    decay: num(v.decay, r.decay[0], r.decay[1], d.decay),
+    release: num(v.release, r.release[0], r.release[1], d.release),
+  };
+}
+
+function migrateEnvs(v: unknown): Record<EnvGroup, Env> {
+  const src = isObj(v) ? v : {};
+  return perEnvGroup((g) => migrateEnv(src[g]));
+}
+
 /** Any partial Look → full Look. Missing params/options take table defaults; v1 Looks are converted. */
 export function migrateLook(v: unknown): Look {
   const src = isObj(v) ? v : {};
@@ -205,7 +251,7 @@ export function migrateLook(v: unknown): Look {
   for (const def of PARAMS) params[def.id] = migrateParamState(p[def.id], def);
   const version = typeof src.v === 'number' ? src.v : 1;
   if (version < 2 && isObj(p.zoom) && typeof p.zoom.react === 'number') params.zoom.react = migrateZoomReact(params.zoom.react, params.zoom.base);
-  return { v: LOOK_VERSION, params, options: migrateOptions(src.options) };
+  return { v: LOOK_VERSION, params, options: migrateOptions(src.options), env: migrateEnvs(src.env) };
 }
 
 export function migratePreset(v: unknown): Preset | null {
