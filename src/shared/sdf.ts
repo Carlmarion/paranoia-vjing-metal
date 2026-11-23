@@ -154,3 +154,24 @@ export function bakeMask(mask: Uint8Array, size: number): Uint16Array {
 export function blankHalf(cell: number): Uint16Array {
   return new Uint16Array(cell * cell).fill(toHalf(BLANK_D));
 }
+
+/**
+ * Design §4.2: the largest distance from the cell centre, in motif units (the cell spans −1…+1), of any texel
+ * on or inside the ink (SDF ≤ 0: float16 sign bit set, or zero). A blank layer → 0.
+ */
+export function inkRadius(half: Uint16Array, cell: number): number {
+  let r2 = 0;
+  const k = 2 / cell;
+  for (let y = 0; y < cell; y++) {
+    const py = (y + 0.5) * k - 1;
+    const row = y * cell;
+    for (let x = 0; x < cell; x++) {
+      const h = half[row + x];
+      if ((h & 0x8000) === 0 && h !== 0) continue;
+      const px = (x + 0.5) * k - 1;
+      const d2 = px * px + py * py;
+      if (d2 > r2) r2 = d2;
+    }
+  }
+  return Math.sqrt(r2);
+}
