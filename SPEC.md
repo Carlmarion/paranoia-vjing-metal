@@ -165,6 +165,7 @@ interface ParamState { base: number; react: number; band: Band; thr: number; loc
 
 // A Look is what a preset stores.
 interface Look {
+  v: 2;                           // format version; a Look without v (or v < 2) is v1 and is converted on load (B4.2)
   params: Record<ParamId, ParamState>;
   options: {
     meltMode: 0 | 1 | 2;          // 0 blend, 1 fuse, 2 spatial
@@ -188,6 +189,7 @@ interface Session {
   meltHold: boolean; holdPos: number;   // manual melt scrub, 0…1
   queued: number | null;                // motif queued as next
   live: boolean;                        // the live layer is on the projector (B12.5); never persisted
+  zoomStop: boolean;                    // B4.4 stop; default true
 }
 
 // Shapes (B12). Coordinates are motif units: the square canvas spans −1…+1, y up, like the shader.
@@ -241,6 +243,7 @@ value  = fromNorm(scale == 'wrap' ? fract(u) : clamp01(u))
 - `lock` excludes a param from drift, randomize and mutate.
 - A `—` in the driftPeriod column means the param has no drift (its driftAmp is 0).
 - `bandValue` for `beat` is the beat pulse (B6.4); for `energy` it is `energy30`.
+- After all params are computed, the **stop** (B4.4) may hold `zoom` and `mirrorShift` back.
 
 ### B4.2 The table
 
@@ -248,7 +251,7 @@ Units: motif space, the cell is −1…+1. A typical stroke half-width is 0.02�
 
 | id | group | scale | min | max | default | band | react | thr | driftAmp | driftPeriod s | rand range |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| zoom | shape | lin | 0.5 | 1.4 | 0.85 | low | 0.06 | 0.15 | 0.04 | 120 | 0.7–1.0 |
+| zoom | shape | log | 0.5 | 3 | 0.85 | low | 0.034 | 0.15 | 0.023 | 120 | 0.7–1.0 |
 | rotation | shape | lin | −0.25 | 0.25 | 0 | none | 0 | 0 | 0.15 | 240 | −0.1–0.1 |
 | spin | shape | lin | −6 | 6 | 0 | none | 0 | 0 | 0 | — | −2–2 |
 | tiltX | shape | lin | −0.4 | 0.4 | 0 | none | 0 | 0 | 0.2 | 90 | −0.2–0.2 |
@@ -280,12 +283,34 @@ Units: motif space, the cell is −1…+1. A typical stroke half-width is 0.02�
 | glowWidth | colour | log | 0.02 | 0.4 | 0.12 | none | 0 | 0 | 0.1 | 125 | 0.04–0.3 |
 | grain | colour | lin | 0 | 0.3 | 0.04 | high | 0.3 | 0.3 | 0 | — | 0–0.12 |
 
+**Zoom (v2).** Zoom is `log` 0.5…3, so it can fill the window. A row may carry `reactScale` (zoom: 0.5): randomize and mutate scale their react amounts by it (B8). `react` and `driftAmp` are normalised, so a v1 Look (lin 0.5…1.4) is converted on load: when it stores a numeric zoom react, `push = react × 0.9`, `react = sign(push) × |ln(max(base + push, 0.05) / base)| / ln 6`, clamped to −1…1, which keeps the same push at that base. A v1 zoom without a stored react takes the default.
+
 31 params → `uniform float uP[31];`. `params.ts` exports the GLSL header (`#define P_ZOOM uP[0]`, `#define P_ROTATION uP[1]` …, one line per row, names upper-cased) that `gl.ts` inserts after the `#version` line of the fragment source. GLSL ES has no `##` token pasting, so each name is its own macro.
 
 `waveFreq` is in cycles per motif unit. At 1080p the Nyquist limit is about 230, so values above that alias on purpose: this is the moiré effect.
 
 ### B4.3 Phases
 A speed param that changes over time must not be multiplied by time (it jumps). `modulation.ts` integrates four phases each frame and uploads them: `uWarpPhase += warpSpeed × dt`, `uSpikePhase += spikeSpeed × dt`, `uWavePhase += waveSpeed × dt`. `uWavePhase` wraps at 1000 (it feeds a sine, so the wrap is invisible). The warp and spike phases are noise coordinates and are never wrapped: a wrap would make the shape jump. The shader's `hash` is an integer hash of the cell index, exact up to 2^24 cells, so noise stays clean for days of running. `uSpinPhase` is in turns, kept in 0…1. It advances by `spin / 60 × dt`, where `spin` is the effective value in turns per minute: band and react make the motif turn with the music, and with `base` 0 it stays where the sound left it. While spin is fully off (`base` 0 and `react` 0) it glides back to the nearest whole turn with a time constant of 0.4 s and snaps to exactly 0 within 1e-4, so the motif returns upright without a jump.
+
+### B4.4 Reach, zones and the stop (`reach.ts`)
+
+**Ink radius.** For every texture layer the Display keeps the largest distance from the cell centre, in motif units, of any texel with SDF ≤ 0 (`sdf.ts` `inkRadius`; a blank layer → 0). Baked layers are measured from `atlas.bin` at load, and every upload (drawn shapes, re-bakes, the live layer, replays) measures again. The radius used for a frame is `radius[A]`, or `max(radius[A], radius[B])` during a melt; layer 0 in fallback.
+
+**Fill.** In screen units (the window's short side spans −1…+1), with window half-extents `ax = w / min(w, h)`, `ay = h / min(w, h)`:
+```
+grow   = max(thickness, 0) + spikeAmp + warpAmt × √2 + (fuse melt running ? meltK / 4 : 0)
+Rink   = R + grow                                   (0 when R = 0)
+Rglow  = Rink + (glow × brightness > 0.08 ? glowWidth × ln(glow × brightness / 0.08) : 0)
+for Rx in (Rink, Rglow):
+  ρ = zoom × Rx;  ex = ρ + (mirrorX ? mirrorShift : 0);  ey = ρ + (mirrorY ? mirrorShift : 0)
+  k = 1 / max(1 − |tiltX| × ex − |tiltY| × ey, 0.05)
+  fill = max(ex × k / ax, ey × k / ay)
+```
+`fillInk ≥ 1`: the line touches the window edge (**red**). `fillGlow ≥ 1`: the glow does (**orange**). Rotation and spin do not enter: a radius is the same at every angle, so this errs on the safe side. A zero-size or invalid window gives fill 0. `limit(param, kind)` is the value of `zoom` or `mirrorShift` where `fill[kind] = 1` (bisection, 24 steps); the range max when never reached, the min when always exceeded.
+
+**Stop** (`session.zoomStop`, default on, not in fallback). For `x` in zoom and mirrorShift, with `x_hand = base` and `x_full` the B4.1 value: `x_final = x_full ≤ x_hand ? x_full : max(x_hand, min(x_full, x_limit))`, with the ink limit. Order: mirrorShift first (only with a mirror on; zoom at its hand value), then zoom (with the final mirrorShift). Sound and drift can move outward only up to the red line, never below the hand; inward motion is free. Other effects (a thickness kick, tilt drift) can still nudge a line already at the edge over it. With the stop off, values are exactly B4.1.
+
+**Zones.** Each frame the Display computes, with the other params at rest (base + drift, no sound), the normalised slider positions where orange and red start on zoom and mirrorShift (1 = never; mirrorShift `[1, 1]` without a mirror), and sends them in `meters.zones` (B9).
 
 ## B5. Shader (`shader.frag`, `#version 300 es`)
 
@@ -453,8 +478,8 @@ The live layer (`LIVE = MAX_LAYERS − 1`) is a motif like any other for the sha
 - **16 slots.** `save(slot?)` writes the current Look to the given slot, or the first empty one, named `HH:MM:SS`. `rename`, `delete`.
 - **Recall** crossfades over `session.xfade` seconds: `base`, `react` and `thr` interpolate in normalised space (hue takes the shortest way round); `band`, `lock` and all `options` switch at the start.
 - **Default Look options:** `meltMode` 1 (fuse), `mirrorX` false, `mirrorY` false, `hueJumpEvery` 0, `hueJumpAmt` 0.25, `holdBeats` 32, `morphBeats` 16.
-- **Randomize(group?)** for every unlocked param (optionally only one group): `base` uniform in the rand range (log-uniform for log params); `react` uniform in 0…0.6, sign positive; `band` = table default with probability 0.5, else uniform among low, mid, high, beat, energy; `thr` uniform in 0…0.5. Options: `meltMode` uniform; `mirrorX`, `mirrorY` true with probability 0.25 each. Never touches `brightness`, `holdBeats`, `morphBeats`, `hueJumpEvery`.
-- **Mutate:** for every unlocked param, `base_norm += N(0, 0.08)`, `react += N(0, 0.1)`, `thr += N(0, 0.05)`, all clamped. Options unchanged. This is the tool for walking around a sweet spot.
+- **Randomize(group?)** for every unlocked param (optionally only one group): `base` uniform in the rand range (log-uniform for log params); `react` uniform in 0…0.6 × `reactScale`, sign positive; `band` = table default with probability 0.5, else uniform among low, mid, high, beat, energy; `thr` uniform in 0…0.5. Options: `meltMode` uniform; `mirrorX`, `mirrorY` true with probability 0.25 each. Never touches `brightness`, `holdBeats`, `morphBeats`, `hueJumpEvery`.
+- **Mutate:** for every unlocked param, `base_norm += N(0, 0.08)`, `react += N(0, 0.1 × reactScale)`, `thr += N(0, 0.05)`, all clamped. Options unchanged. This is the tool for walking around a sweet spot.
 - **Reset(group?)**: back to table defaults.
 - **Undo:** ring of 30 Looks, pushed before randomize, mutate, reset and recall. Undo crossfades over 1 s.
 - Randomize and mutate also crossfade over `session.xfade`.
@@ -483,7 +508,9 @@ The live layer (`LIVE = MAX_LAYERS − 1`) is a motif like any other for the sha
 // Display → Control
 { t: 'state', state: State, manifest, devices }                    // on hello, and ≤ 10×/s after changes
 { t: 'meters', audio: AudioFrame, values: number[31],              // effective param values, normalised
-  motifA, motifB, morphT, holdRemaining, fps, error?: string }     // 20×/s; doubles as heartbeat
+  motifA, motifB, morphT, holdRemaining, fps,                      // 20×/s; doubles as heartbeat
+  zones: { zoom: [orange, red], mirrorShift: [orange, red] },      // B4.4, normalised slider positions
+  error?: string }
 { t: 'library', version: number, shapes: ShapeMeta[], free: number, persistent: boolean }
                          // on hello and whenever the library changes; free = empty slots; persistent = false without IndexedDB
 { t: 'shapeStrokes', id, name, strokes: Stroke[], duplicateOf?: string }
@@ -517,13 +544,14 @@ Dark, low-luminance UI (the laptop must not light the room): background `#0b0b0d
 - Base sliders are marked at 0 when their range spans it (fill grows from 0), and rotation every 45°. Dragging snaps to a mark within ±2.5% of the track.
 - A moving tick on the base slider shows the live effective value from `meters.values`. This is the main feedback for tuning thresholds.
 - A thin bar under the thr slider shows the chosen band's live level, so the threshold can be set against the signal.
+- The **zoom** and **mirrorShift** base tracks are coloured from `meters.zones` (B4.4): quiet green, orange from where the glow touches the window, red from where the line does. The thumb and the live tick stay the brightest marks.
 - Double-click a slider = reset to default. Shift-drag = fine (×0.1). Mouse wheel = step.
 - Slider input is sent at most once per animation frame.
 
 **Right column: performance**
 - 16 preset slots (click = recall, shift-click = overwrite, right-click = rename or delete). Save button.
 - Randomize all, Mutate all, Undo, Reset all.
-- Sliders: `autopilot`, `reactMaster`, `xfade`. Select: `presetCycleMin`.
+- Sliders: `autopilot`, `reactMaster`, `xfade`. Toggle: **Zoom stop** (`session.zoomStop`). Select: `presetCycleMin`.
 - Export, Import.
 - Collapsible **Calibration**: input device, `inputGain` (0…4), `onsetK` (0.5…4), `smooth` (0.25…4), `floorDb` (−90…−30), `gainDecay` (4…60 s), `refractoryMs` (150…600), and a live readout of `rawDb` per band.
 
@@ -636,6 +664,8 @@ Same result as `tools/bake_sdf.py` (B2.2), computed in a Web Worker so the proje
 - **sequencer:** same seed + same beat stream → same motif sequence; no motif repeats within 3 transitions (count ≥ 5); in silence a morph still starts after `holdBeats × 0.5 s`; with `holdBeats` 0, HOLD lasts at most 1 frame; `uMorphT` is continuous: at 60 fps no frame changes it by more than 0.05, including when a command arrives during a morph and when melt hold is entered or left at any position; the eased curve has `uMorphT = 0.5` at `p = 0.5` for every `linger`, zero speed at `p = 0` and `p = 1`, and is strictly increasing; inverting it returns `p` within 1e-4.
 - **presets:** save → export → import round-trip is identical; randomize and mutate never change locked params and never leave rand or min…max ranges; crossfade endpoints are exact; undo restores the previous Look; hue interpolates the short way.
 - **store:** every message type; unknown messages are ignored; a corrupt `localStorage` value falls back to defaults.
+- **state:** a v1 Look keeps the same zoom push at its base; a v2 Look is not converted again; a v1 zoom without a react keeps the default.
+- **reach:** fill grows with zoom and mirrorShift; mirrorShift counts only on a mirrored axis and does not scale with zoom; tilt raises fill; the bisected limit gives fill 1 within 1e-3; a wider or taller window never lowers the limit; radius 0, glow 0 and a zero-size window give finite results. **Stop:** sound never raises zoom past the limit; the hand past it is kept; negative react still pulls in; zones do not move with the kick; stop off = B4.1. `inkRadius` of a known disc within 0.015.
 - **strokes:** smoothing keeps a straight raw line straight and never lags the raw point by more than one sample spacing; a point under R6 gives 6 points at the same radius, 60° apart, one group; X mirror negates x only; coverage of a known disc is within 2% of its area; slicing a path at `q × L` returns a prefix whose length is `q × L` within 1e-6, monotonic in `q`, and the whole list at `q = 1`; mid-group every copy is cut at the same length.
 - **raster:** `y = +0.8` maps to the top rows; one-point strokes draw a dot; eraser strokes paint `destination-out` in order; ink = alpha ≥ 128.
 - **sdf:** on a mask holding one centred disc, the field matches the analytic distance within 1 px everywhere, negative inside; a blank mask gives a constant `+2`; the 2×2 downsample is the mean; float16 round-trip of `|d| ≤ 2` is within 2e-3; the mask → float16 bake of a 1024² ring runs in under 60 ms in the test runner (the canvas raster step has no Node equivalent and is measured in the browser).
@@ -734,6 +764,7 @@ M0 passed on 14 Nov on the venue chain (mixer → Focusrite → Display → proj
 | Reaction always saturated | Raise `thr` first, then lower `react` |
 | Constant strobing | Lower `react` on `brightness`; raise `hueJumpEvery` |
 | Shapes turn to mush | Lower `warpAmt`, `spikeAmp`; raise `warpScale` |
+| Shape or glow leaves the window | Watch the zoom row: orange = glow touches, red = line touches. Keep **Zoom stop** on so the kick never crosses red |
 | Lines too thin on the projector | Raise `thickness` base to 0.01–0.02 |
 | Melt looks like a crossfade | Use melt mode fuse; raise `linger`; raise `meltK` |
 | Too busy overall | Lower `reactMaster` to 0.6; autopilot 0.3 |

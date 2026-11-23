@@ -1,7 +1,7 @@
 // Control window (B10): a remote for the Display. Holds no state of its own — every control shows the
 // last `state` message, except a slider that is under the pointer.
 import './control.css';
-import { PARAMS, GROUPS, fromNorm, toNorm, type Band, type Group, type ParamDef } from '../shared/params';
+import { PARAMS, PARAM_INDEX, GROUPS, fromNorm, toNorm, type Band, type Group, type ParamDef } from '../shared/params';
 import {
   BANDS, HOLD_BEATS, MORPH_BEATS, HUE_JUMP_EVERY, MELT_MODES, ORDERS, PRESET_CYCLE_MIN, PRESET_SLOTS,
   REACT_RANGE, THR_RANGE, HUE_JUMP_AMT_RANGE, SESSION_RANGES, CALIB_RANGES,
@@ -38,7 +38,7 @@ let metersDirty = false;
 let lastMetersAt = -Infinity;
 
 const setSession = (key: keyof Session, value: Session[keyof Session]): void => send({ t: 'setSession', key, value });
-const toggleSession = (key: 'autoAdvance' | 'frozen' | 'fallback' | 'blackout' | 'meltHold'): void => {
+const toggleSession = (key: 'autoAdvance' | 'frozen' | 'fallback' | 'blackout' | 'meltHold' | 'zoomStop'): void => {
   if (last) setSession(key, !last.state.session[key]);
 };
 const cmd = (name: Extract<ControlMsg, { t: 'cmd' }>['name'], arg?: unknown): void =>
@@ -299,6 +299,9 @@ const sessSliders = {
   reactMaster: numSlider(right, 'reactMaster', lin(...SESSION_RANGES.reactMaster), 's:reactMaster', (v) => ({ t: 'setSession', key: 'reactMaster', value: v }), ds.reactMaster),
   xfade: numSlider(right, 'xfade', lin(...SESSION_RANGES.xfade), 's:xfade', (v) => ({ t: 'setSession', key: 'xfade', value: v }), ds.xfade, { unit: 's' }),
 };
+const stopRow = row('stop', right);
+const zoomStopBtn = toggleBtn('Zoom stop', () => toggleSession('zoomStop'), stopRow);
+zoomStopBtn.title = 'sound and autopilot cannot push zoom or mirror shift past the window edge';
 const cycleRow = row('cycle', right);
 const cycleSel = h('select', '', undefined, cycleRow);
 for (const m of PRESET_CYCLE_MIN) { const o = h('option', '', m === 0 ? 'off' : `${m} min`, cycleSel); o.value = String(m); }
@@ -389,6 +392,7 @@ function applyState(msg: StateMsg): void {
   setOn(blackoutBtn, session.blackout);
   setOn(autoBtn, session.autoAdvance);
   setOn(meltHoldBtn, session.meltHold);
+  setOn(zoomStopBtn, session.zoomStop);
   orderSeg.set(session.order);
   holdPos.set(session.holdPos);
   sessSliders.autopilot.set(session.autopilot);
@@ -441,6 +445,9 @@ function applyMeters(m: MetersMsg): void {
     r.base.setTick(m.values[i] ?? 0);
     r.thr.setBar(thrMap.toU(bandValue(rowBands[i], a)));
   }
+
+  paramRows[PARAM_INDEX.zoom]?.base.setZones(...m.zones.zoom);
+  paramRows[PARAM_INDEX.mirrorShift]?.base.setZones(...m.zones.mirrorShift);
 
   shapes.mark(m.motifA, m.motifB, last?.state.session.queued ?? null);
   if (m.motifA !== lastMotifA) { lastMotifA = m.motifA; draw.onCurrent(); }
