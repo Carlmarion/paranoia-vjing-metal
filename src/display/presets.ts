@@ -12,7 +12,7 @@ export const UNDO_FADE_S = 1;
 export function cloneLook(l: Look): Look {
   const params = {} as Record<ParamId, ParamState>;
   for (const def of PARAMS) params[def.id] = { ...l.params[def.id] };
-  return { params, options: { ...l.options } };
+  return { v: l.v, params, options: { ...l.options } };
 }
 
 // ---------- slots ----------
@@ -104,7 +104,7 @@ export function lerpLook(a: Look, b: Look, k: number): Look {
       lock: pb.lock,
     };
   }
-  return { params, options: b.options };
+  return { v: b.v, params, options: b.options };
 }
 
 /** A crossfade from `from` towards the live target (state.look). */
@@ -140,7 +140,7 @@ export function randomize(look: Look, rng: Rng, group?: Group): Look {
     if (ps.lock || !def.rand || (group && def.group !== group)) continue;
     const [lo, hi] = def.rand;
     ps.base = def.scale === 'log' ? lo * Math.pow(hi / lo, rng()) : lo + (hi - lo) * rng();
-    ps.react = rng() * RANDOM_REACT_MAX;
+    ps.react = rng() * RANDOM_REACT_MAX * (def.reactScale ?? 1);
     ps.band = rng() < 0.5 ? def.band : RANDOM_BANDS[randInt(rng, RANDOM_BANDS.length)];
     ps.thr = rng() * RANDOM_THR_MAX;
   }
@@ -161,7 +161,7 @@ export function mutate(look: Look, rng: Rng, group?: Group): Look {
     const ps = out.params[def.id];
     if (ps.lock || (group && def.group !== group)) continue;
     ps.base = fromNorm(def, clamp01(toNorm(def, ps.base) + gaussian(rng) * MUTATE_SD.base));
-    ps.react = clamp(ps.react + gaussian(rng) * MUTATE_SD.react, REACT_RANGE[0], REACT_RANGE[1]);
+    ps.react = clamp(ps.react + gaussian(rng) * MUTATE_SD.react * (def.reactScale ?? 1), REACT_RANGE[0], REACT_RANGE[1]);
     ps.thr = clamp(ps.thr + gaussian(rng) * MUTATE_SD.thr, THR_RANGE[0], THR_RANGE[1]);
   }
   return out;

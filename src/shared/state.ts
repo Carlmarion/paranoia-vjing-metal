@@ -1,5 +1,5 @@
 // State model (B3): types, defaults, serialise, migrate, safe storage.
-import { PARAMS, PARAM_IDS, type Band, type ParamDef, type ParamId } from './params';
+import { PARAMS, PARAM_IDS, paramDef, type Band, type ParamDef, type ParamId } from './params';
 import { clamp } from './math';
 
 export type { Band } from './params';
@@ -21,8 +21,11 @@ export interface LookOptions {
   morphBeats: MorphBeats;
 }
 
+/** Current Look format. v2: zoom is log 0.5…3 (react converted from the v1 lin 0.5…1.4 range). */
+export const LOOK_VERSION = 2;
+
 /** A Look is what a preset stores. */
-export interface Look { params: Record<ParamId, ParamState>; options: LookOptions; }
+export interface Look { v: typeof LOOK_VERSION; params: Record<ParamId, ParamState>; options: LookOptions; }
 
 export type Order = 'random' | 'sequential';
 export type PresetCycleMin = 0 | 2 | 5 | 10;
@@ -104,7 +107,7 @@ export function defaultOptions(): LookOptions {
 export function defaultLook(): Look {
   const params = {} as Record<ParamId, ParamState>;
   for (const def of PARAMS) params[def.id] = defaultParamState(def);
-  return { params, options: defaultOptions() };
+  return { v: LOOK_VERSION, params, options: defaultOptions() };
 }
 
 /** B7.5 fallback: table defaults, react zero except zoom and brightness. */
@@ -177,13 +180,30 @@ export function migrateOptions(v: unknown): LookOptions {
   };
 }
 
-/** Any partial Look → full Look. Missing params/options take table defaults. */
+/** v1 zoom range (lin), used only to convert old reacts. */
+const V1_ZOOM_SPAN = 1.4 - 0.5;
+
+/**
+ * Design §4.1: a v1 zoom react (normalised over lin 0.5…1.4) → the v2 react (normalised over log 0.5…3)
+ * that gives the same push at `base`.
+ */
+export function migrateZoomReact(reactOld: number, base: number): number {
+  const def = paramDef('zoom');
+  const push = reactOld * V1_ZOOM_SPAN;
+  if (push === 0) return 0;
+  const r = Math.abs(Math.log(Math.max(base + push, 0.05) / base)) / Math.log(def.max / def.min);
+  return clamp(Math.sign(push) * r, REACT_RANGE[0], REACT_RANGE[1]);
+}
+
+/** Any partial Look → full Look. Missing params/options take table defaults; v1 Looks are converted. */
 export function migrateLook(v: unknown): Look {
   const src = isObj(v) ? v : {};
   const params = {} as Record<ParamId, ParamState>;
   const p = isObj(src.params) ? src.params : {};
   for (const def of PARAMS) params[def.id] = migrateParamState(p[def.id], def);
-  return { params, options: migrateOptions(src.options) };
+  const version = typeof src.v === 'number' ? src.v : 1;
+  if (version < 2 && isObj(p.zoom) && typeof p.zoom.react === 'number') params.zoom.react = migrateZoomReact(params.zoom.react, params.zoom.base);
+  return { v: LOOK_VERSION, params, options: migrateOptions(src.options) };
 }
 
 export function migratePreset(v: unknown): Preset | null {

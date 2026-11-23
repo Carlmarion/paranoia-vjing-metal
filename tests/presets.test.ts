@@ -132,6 +132,12 @@ describe('randomize', () => {
     expect(d.scale).toBe('log');
   });
 
+  test('zoom react is scaled by reactScale (0.5): never above 0.3', () => {
+    const rng = mulberry32(21);
+    for (let i = 0; i < 200; i++) expect(randomize(defaultLook(), rng).params.zoom.react).toBeLessThanOrEqual(0.3);
+    expect(paramDef('zoom').reactScale).toBe(0.5);
+  });
+
   test('is deterministic for a seed and does not mutate its input', () => {
     const base = defaultLook();
     const snapshot = cloneLook(base);
@@ -152,6 +158,21 @@ describe('mutate', () => {
       expect(next.options).toEqual(look.options);
       look = next;
     }
+  });
+
+  test('zoom react steps have about half the spread of another param', () => {
+    const rng = mulberry32(22);
+    let sz = 0, sw = 0;
+    const n = 2000;
+    for (let i = 0; i < n; i++) {
+      const look = defaultLook();
+      look.params.zoom.react = 0; look.params.warpAmt.react = 0;
+      const m = mutate(look, rng);
+      sz += m.params.zoom.react ** 2; sw += m.params.warpAmt.react ** 2;
+    }
+    const ratio = Math.sqrt(sz / n) / Math.sqrt(sw / n);
+    expect(ratio).toBeGreaterThan(0.4);
+    expect(ratio).toBeLessThan(0.6);
   });
 
   test('moves unlocked params by small steps', () => {
@@ -194,11 +215,11 @@ describe('crossfade', () => {
     const a = defaultLook();
     const b = cloneLook(a);
     b.params.warpScale.base = 8; // log 0.5…8: norm 0.5 → 1
-    b.params.zoom = { base: 1.4, react: 1, band: 'beat', thr: 0.9, lock: true };
+    b.params.zoom = { base: 3, react: 1, band: 'beat', thr: 0.9, lock: true };
     b.options.meltMode = 0;
     const m = lerpLook(a, b, 0.5);
     expect(m.params.warpScale.base).toBeCloseTo(0.5 * Math.pow(16, 0.75), 9);
-    expect(m.params.zoom.react).toBeCloseTo((0.06 + 1) / 2, 9);
+    expect(m.params.zoom.react).toBeCloseTo((paramDef('zoom').react + 1) / 2, 9);
     expect(m.params.zoom.thr).toBeCloseTo((0.15 + 0.9) / 2, 9);
     const early = lerpLook(a, b, 0.01);
     expect(early.params.zoom.band).toBe('beat');

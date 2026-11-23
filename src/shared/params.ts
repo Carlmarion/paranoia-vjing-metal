@@ -20,16 +20,19 @@ export interface ParamDef {
   driftPeriod: number | null;
   /** null = never randomized */
   rand: [number, number] | null;
+  /** Scales randomize's and mutate's react amounts (default 1). Zoom's wide log range needs less. */
+  reactScale?: number;
 }
 
 const row = (
   id: string, group: Group, scale: Scale, min: number, max: number, def: number,
   band: Band, react: number, thr: number, driftAmp: number, driftPeriod: number | null,
   rand: [number, number] | null,
-): ParamDef => ({ id, group, scale, min, max, def, band, react, thr, driftAmp, driftPeriod, rand });
+  extra: { reactScale?: number } = {},
+): ParamDef => ({ id, group, scale, min, max, def, band, react, thr, driftAmp, driftPeriod, rand, ...extra });
 
 export const PARAMS = [
-  row('zoom', 'shape', 'lin', 0.5, 1.4, 0.85, 'low', 0.06, 0.15, 0.04, 120, [0.7, 1.0]),
+  row('zoom', 'shape', 'log', 0.5, 3, 0.85, 'low', 0.034, 0.15, 0.023, 120, [0.7, 1.0], { reactScale: 0.5 }),
   row('rotation', 'shape', 'lin', -0.25, 0.25, 0, 'none', 0, 0, 0.15, 240, [-0.1, 0.1]),
   row('spin', 'shape', 'lin', -6, 6, 0, 'none', 0, 0, 0, null, [-2, 2]),
   row('tiltX', 'shape', 'lin', -0.4, 0.4, 0, 'none', 0, 0, 0.2, 90, [-0.2, 0.2]),

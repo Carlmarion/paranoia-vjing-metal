@@ -8,6 +8,7 @@ import {
   type StorageLike,
 } from '../src/shared/state';
 import { mulberry32 } from '../src/shared/math';
+import { paramDef } from '../src/shared/params';
 
 const NOW = new Date(2026, 10, 19, 22, 0, 0).getTime();
 /** 12 baked shapes (layers 0–11) and one drawn shape `drawn:abc` on layer 12. */
@@ -57,7 +58,7 @@ describe('boot and storage', () => {
     s.setItem(STORAGE_KEYS.look, JSON.stringify({ params: { zoom: { base: 99, band: 'bass' } }, options: { holdBeats: 7 } }));
     const st = initialModel(1, s).model.state;
     expect(st.calib).toEqual({ ...defaultCalib(), floorDb: -90, refractoryMs: 200 });
-    expect(st.look.params.zoom).toEqual({ ...defaultLook().params.zoom, base: 1.4 });
+    expect(st.look.params.zoom).toEqual({ ...defaultLook().params.zoom, base: 3 }); // no stored react → nothing to convert
     expect(st.look.options.holdBeats).toBe(32);
   });
 
@@ -150,7 +151,7 @@ describe('messages', () => {
       { t: 'setParam', id: 'zoom', field: 'thr', value: 2 },
       { t: 'setParam', id: 'zoom', field: 'band', value: 'beat' },
       { t: 'setParam', id: 'zoom', field: 'lock', value: true });
-    expect(m.state.look.params.zoom).toEqual({ base: 1.4, react: -1, thr: 0.95, band: 'beat', lock: true });
+    expect(m.state.look.params.zoom).toEqual({ base: 3, react: -1, thr: 0.95, band: 'beat', lock: true });
     expect(m.state.look.params.rotation).toEqual(defaultLook().params.rotation);
   });
 
@@ -273,7 +274,7 @@ describe('display-side writes', () => {
   test('fallback renders the safe Look without touching the live one', () => {
     const m = apply(fresh(), { t: 'cmd', name: 'randomize' }, { t: 'setSession', key: 'fallback', value: true });
     expect(renderLook(m)).toEqual(fallbackLook());
-    expect(renderLook(m).params.zoom.react).toBe(0.06);
+    expect(renderLook(m).params.zoom.react).toBe(paramDef('zoom').react);
     expect(renderLook(m).params.glow.react).toBe(0);
     expect(m.state.look).not.toEqual(fallbackLook());
   });
