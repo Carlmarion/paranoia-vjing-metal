@@ -73,6 +73,8 @@ export interface Session {
   live: boolean;
   /** Design §4.4: sound and drift cannot push zoom or mirror shift past the window edge. */
   zoomStop: boolean;
+  /** Design §6: Ambient mode is on. Set only by the `ambient` command (and at boot from a stored stash). */
+  ambient: boolean;
 }
 
 /** Venue-dependent. Never stored in presets. */
@@ -153,7 +155,7 @@ export function fallbackLook(): Look {
 export function defaultSession(): Session {
   return {
     autopilot: 0.5, reactMaster: 1, xfade: 3, autoAdvance: true, order: 'random', presetCycleMin: 0,
-    frozen: false, fallback: false, blackout: false, meltHold: false, holdPos: 0, queued: null, live: false, zoomStop: true,
+    frozen: false, fallback: false, blackout: false, meltHold: false, holdPos: 0, queued: null, live: false, zoomStop: true, ambient: false,
   };
 }
 
@@ -307,6 +309,7 @@ export function parseJson(text: string | null): unknown {
 
 export const STORAGE_KEYS = {
   presets: 'ferro.presets.v1', calib: 'ferro.calib.v1', look: 'ferro.look.v1', pool: 'ferro.pool.v1',
+  ambient: 'ferro.ambient.v1',
 } as const;
 
 /** The subset of `Storage` we use, injectable for tests. */

@@ -94,6 +94,8 @@ input[type=checkbox] { accent-color: var(--accent); width: 14px; height: 14px; m
 .livebadge { display: none; font-weight: 700; letter-spacing: .1em; color: #ff3b30; }
 .livebadge.on { display: inline; animation: blink 1s steps(2, start) infinite; }
 @keyframes blink { to { visibility: hidden; } }
+.livebadge.ambient { color: #7fa7c9; }
+.livebadge.ambient.on { animation: none; }
 
 /* ---------- columns ---------- */
 .cols { flex: 1; min-height: 0; display: grid; grid-template-columns: 290px minmax(0, 1fr) 320px; }

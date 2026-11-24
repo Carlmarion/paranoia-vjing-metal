@@ -199,6 +199,7 @@ interface Session {
   queued: number | null;                // motif queued as next
   live: boolean;                        // the live layer is on the projector (B12.5); never persisted
   zoomStop: boolean;                    // B4.4 stop; default true
+  ambient: boolean;                     // B8.1 Ambient mode; only the `ambient` command sets it
 }
 
 // Shapes (B12). Coordinates are motif units: the square canvas spans −1…+1, y up, like the shader.
@@ -512,6 +513,14 @@ The live layer (`LIVE = MAX_LAYERS − 1`) is a motif like any other for the sha
 - **Export** downloads `ferro-presets-YYYYMMDD-HHMM.json`. **Import** validates and merges into empty slots.
 - All randomness uses the seeded PRNG.
 
+### B8.1 Ambient mode (`ambient.ts`)
+
+For when the music turns ambient: one press calms everything driven by the kick, the beat or the highs, and a second press gives it back.
+- **On** (`cmd ambient`, key `A`): every param with band `low`, `beat` or `high` and `react ≠ 0` gets `react = 0`; each envelope (B4.5) not already at `AMBIENT_ENV = { attack: 0.3, sustain: 0.5, decay: 2, release: 4 }` is set to it. What was taken (`{ react, band }` per param, the old envelope per group) goes into the **stash**. Crossfade 5 s, whatever `session.xfade` is. `session.ambient = true`.
+- **Off** (same command): each stashed param whose react is still exactly 0 on the same band gets its react back; each group whose envelope still equals `AMBIENT_ENV` gets its envelope back. Every hand edit made meanwhile is kept. Crossfade 5 s; the stash is cleared.
+- **While on:** hand edits are free (that is how reactions are re-added). Preset recall (by hand or by the cycle), Reset, and Undo of an entry from before Ambient pass through the same transform, and what they owe **merges** into the stash: a param calmed now writes its entry; a param already at 0 on the same band keeps its old entry; anything else drops it; an envelope already at `AMBIENT_ENV` keeps its old entry. Undo of an entry pushed while Ambient was on is applied as is (each undo entry records the flag). Randomize leaves no reaction on `low`, `beat` or `high`; mutate leaves a calm (0) reaction there at 0. Save stores the calm Look. Only the button ends Ambient.
+- **Persistence:** the stash lives in the Display's model, never in a preset or a state message, and is written to `ferro.ambient.v1` whenever it changes (`null` when off). At boot, a valid stored stash turns Ambient back on, so a Display reload mid-set can still give everything back. A corrupt value is ignored.
+
 ## B9. Protocol (`src/shared/protocol.ts`)
 
 ```ts
@@ -520,7 +529,7 @@ The live layer (`LIVE = MAX_LAYERS − 1`) is a motif like any other for the sha
 { t: 'setParam', id: ParamId, field: 'base' | 'react' | 'band' | 'thr' | 'lock', value }
 { t: 'setOption', key, value }  { t: 'setSession', key, value }  { t: 'setCalib', key, value }
 { t: 'setEnv', group: 'shape' | 'line' | 'colour', key: keyof Env, value: number }   // clamped to the B3 ranges
-{ t: 'cmd', name: 'next' | 'prev' | 'random' | 'goto' | 'queue' | 'randomize' | 'mutate' | 'reset' | 'undo'
+{ t: 'cmd', name: 'next' | 'prev' | 'random' | 'goto' | 'queue' | 'randomize' | 'mutate' | 'reset' | 'undo' | 'ambient'
               | 'savePreset' | 'loadPreset' | 'deletePreset' | 'renamePreset' | 'importPresets'
               | 'replay', arg? }                                    // replay: arg = ShapeKey of a drawn shape
 // shapes (B12)
@@ -584,6 +593,7 @@ The shape, line and colour headers also hold a **mini curve** (64×18 px) of the
 **Right column: performance**
 - 16 preset slots (click = recall, shift-click = overwrite, right-click = rename or delete). Save button.
 - Randomize all, Mutate all, Undo, Reset all.
+- **Ambient (A)** toggle, lit while on (B8.1); the top bar shows `AMBIENT` while on.
 - Sliders: `autopilot`, `reactMaster`, `xfade`. Toggle: **Zoom stop** (`session.zoomStop`). Select: `presetCycleMin`.
 - Export, Import.
 - Collapsible **Calibration**: input device, `inputGain` (0…4), `onsetK` (0.5…4), `smooth` (0.25…4), `floorDb` (−90…−30), `gainDecay` (4…60 s), `refractoryMs` (150…600), and a live readout of `rawDb` per band.
@@ -599,6 +609,7 @@ The shape, line and colour headers also hold a **mini curve** (64×18 px) of the
 | B | Fallback | 1–9 | Recall preset |
 | K | Blackout | D | Debug overlay (Display) |
 | Enter | Fullscreen (Display) | P | Draw (Control) |
+| A | Ambient on / off | | |
 
 While the drawing modal is open, the dashboard keys above are off and the modal's own keys (B12.1) apply.
 
@@ -699,6 +710,7 @@ Same result as `tools/bake_sdf.py` (B2.2), computed in a Web Worker so the proje
 - **store:** every message type; unknown messages are ignored; a corrupt `localStorage` value falls back to defaults.
 - **state:** a v1 Look keeps the same zoom push at its base; a v2 Look is not converted again; a v1 zoom without a react keeps the default.
 - **envelope:** neutral settings return the input exactly for any `dt`; attack is the rise time constant; a sustained sound starts at 1 and sags to `sustain`; release is the tail time constant; a second hit inside the tail peaks lower, and after 60 s of quiet the same; 30 and 120 fps give the same peak (1) and curves within 2%; `dt` 0 or 5 keeps `c` and `y` in 0…1. With neutral envelopes 600 random frames equal B4.1 exactly; inner never uses the envelope; `setEnv` clamps and ignores bad input; `lerpLook` interpolates envelopes; randomize and mutate leave them alone; reset restores neutral per group.
+- **ambient:** on zeroes exactly the low, beat and high reactions and sets the envelopes, over 5 s; off gives the original back, keeps hand edits and skips a param whose band changed; recall and reset while on come out calm; a group reset while on keeps the other groups' stash; undo while on keeps a reaction re-added by hand and calms a pre-ambient entry; randomize while on leaves those reactions at 0; the stash survives a reload and a corrupt one is ignored; a v1 preset imported and recalled while on is migrated, calmed, and restored by Off.
 - **reach:** fill grows with zoom and mirrorShift; mirrorShift counts only on a mirrored axis and does not scale with zoom; tilt raises fill; the bisected limit gives fill 1 within 1e-3; a wider or taller window never lowers the limit; radius 0, glow 0 and a zero-size window give finite results. **Stop:** sound never raises zoom past the limit; the hand past it is kept; negative react still pulls in; zones do not move with the kick; stop off = B4.1. `inkRadius` of a known disc within 0.015.
 - **strokes:** smoothing keeps a straight raw line straight and never lags the raw point by more than one sample spacing; a point under R6 gives 6 points at the same radius, 60° apart, one group; X mirror negates x only; coverage of a known disc is within 2% of its area; slicing a path at `q × L` returns a prefix whose length is `q × L` within 1e-6, monotonic in `q`, and the whole list at `q = 1`; mid-group every copy is cut at the same length.
 - **raster:** `y = +0.8` maps to the top rows; one-point strokes draw a dot; eraser strokes paint `destination-out` in order; ink = alpha ≥ 128.
@@ -798,6 +810,7 @@ M0 passed on 14 Nov on the venue chain (mixer → Focusrite → Display → proj
 | Reaction always saturated | Raise `thr` first, then lower `react` |
 | Constant strobing | Lower `react` on `brightness`; raise `hueJumpEvery` |
 | Shapes turn to mush | Lower `warpAmt`, `spikeAmp`; raise `warpScale` |
+| The music turns ambient | Press `A`: kick, beat and high reactions fade out over 5 s, tails get long. Re-add reactions by hand; `A` again gives the rest back |
 | Too jumpy on slow or ambient music | Open the group's curve: drag S down (fatigue) and R right (longer tail) |
 | Shape or glow leaves the window | Watch the zoom row: orange = glow touches, red = line touches. Keep **Zoom stop** on so the kick never crosses red |
 | Lines too thin on the projector | Raise `thickness` base to 0.01–0.02 |
@@ -820,5 +833,5 @@ chrome --disable-background-timer-throttling --disable-backgrounding-occluded-wi
 6. Drag that window to the projector, click once (starts audio, allow the microphone), press Enter (fullscreen).
 7. Open `http://localhost:5173/control.html` in a second window on the laptop screen. Check the level meter and beat LED.
 8. Load a calm preset. Set `presetCycleMin` and autopilot as rehearsed.
-9. Never minimise the Display window. Emergency keys: `Z`, `B`, `K`.
+9. Never minimise the Display window. Emergency keys: `Z`, `B`, `K`. `A` calms everything for ambient passages; a Display reload keeps Ambient on and can still give everything back.
 10. Bring: spare HDMI cable and adapter, spare audio cable, charger, the exported presets JSON on a USB stick.

@@ -49,7 +49,8 @@ export type CmdName =
   | 'next' | 'prev' | 'random' | 'goto' | 'queue'
   | 'randomize' | 'mutate' | 'reset' | 'undo'
   | 'savePreset' | 'loadPreset' | 'deletePreset' | 'renamePreset' | 'importPresets'
-  | 'replay'; // arg: the ShapeKey of a drawn shape (B12.6)
+  | 'replay' // arg: the ShapeKey of a drawn shape (B12.6)
+  | 'ambient'; // toggles Ambient mode (design §6)
 
 /** Stable identity of a library shape (B12.3); layers are for the shader and the sequencer only. */
 export type ShapeKey = `baked:${number}` | `drawn:${string}`;

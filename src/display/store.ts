@@ -5,7 +5,7 @@ import type { ControlMsg, LiveMsg, ShapeMsg } from '../shared/protocol';
 import {
   BANDS, CALIB_RANGES, ENV_KEYS, ENV_RANGES, HOLD_BEATS, HUE_JUMP_AMT_RANGE, HUE_JUMP_EVERY, MELT_MODES, MORPH_BEATS, ORDERS,
   PRESET_CYCLE_MIN, PRESET_SLOTS, REACT_RANGE, SESSION_RANGES, STORAGE_KEYS, THR_RANGE,
-  defaultState, fallbackLook, isEnvGroup, loadPersisted, migratePresets, safeSet, serialiseCalib, serialiseLook,
+  defaultState, fallbackLook, isEnvGroup, loadPersisted, parseJson, safeGet, migratePresets, safeSet, serialiseCalib, serialiseLook,
   serialisePresets, type Calib, type Env as Envelope, type Look, type LookOptions, type Session, type State, type StorageLike,
 } from '../shared/state';
 import { clamp, type Rng } from '../shared/math';
@@ -14,6 +14,7 @@ import {
   UNDO_FADE_S, cloneLook, deletePreset, fadeLook, importPresets, mutate, popUndo, pushUndo, randomize,
   renamePreset, resetLook, savePreset, startFade, stepFade, type Fade, type UndoEntry,
 } from './presets';
+import { AMBIENT_FADE_S, ambientLook, ambientRestore, migrateAmbientStash, type AmbientStash } from './ambient';
 
 export interface Model {
   state: State;
@@ -23,6 +24,8 @@ export interface Model {
   undo: UndoEntry[];
   /** Slot last saved or recalled. */
   currentPreset: number | null;
+  /** Design §6.2: what Ambient took away, while it is on (null when off). Persisted on its own key, never in State. */
+  ambientStash: AmbientStash | null;
 }
 
 /** Synchronous lookups into the shape library (B12.3), so the reducer stays pure. */
@@ -68,9 +71,11 @@ export function initialModel(seed: number, storage: StorageLike | null): Boot {
   const saved = loadPersisted(storage);
   const state = defaultState(seed);
   if (saved.look) state.look = saved.look;
+  const ambientStash = migrateAmbientStash(parseJson(safeGet(storage, STORAGE_KEYS.ambient)));
+  if (ambientStash) state.session.ambient = true; // a reload mid-set keeps Ambient and what it owes
   if (saved.calib) state.calib = saved.calib;
   if (saved.presets) state.presets = saved.presets;
-  return { model: { state, fade: null, undo: [], currentPreset: null }, needDefaultPresets: saved.presets === null };
+  return { model: { state, fade: null, undo: [], currentPreset: null, ambientStash }, needDefaultPresets: saved.presets === null };
 }
 
 /** Installs the default.json presets (parsed JSON). */
@@ -102,14 +107,35 @@ export function patchSession(model: Model, patch: Partial<Session> | null): Mode
 export function recallPreset(model: Model, slot: number, dur: number): Model {
   const p = Number.isInteger(slot) ? model.state.presets[slot] : undefined;
   if (!p) return model;
-  return { ...changeLook(model, cloneLook(p.look), dur), currentPreset: slot };
+  return { ...replaceLook(model, cloneLook(p.look), dur), currentPreset: slot };
+}
+
+/**
+ * A whole new Look (recall, reset, a pre-ambient undo entry): while Ambient is on it is calmed first and what
+ * it owes merges into the stash (design §6.1), so every path in stays calm and every path out gives back.
+ */
+function replaceLook(model: Model, look: Look, dur: number): Model {
+  if (!model.state.session.ambient) return changeLook(model, look, dur);
+  const calm = ambientLook(look, model.ambientStash);
+  return { ...changeLook(model, calm.look, dur), ambientStash: calm.stash };
+}
+
+/** Design §6.3: toggles Ambient with a 5 s crossfade. */
+function toggleAmbient(model: Model): Model {
+  const s = model.state;
+  if (!s.session.ambient) {
+    const calm = ambientLook(s.look);
+    return patchSession({ ...changeLook(model, calm.look, AMBIENT_FADE_S), ambientStash: calm.stash }, { ambient: true });
+  }
+  const back = model.ambientStash ? ambientRestore(s.look, model.ambientStash) : s.look;
+  return patchSession({ ...changeLook(model, back, AMBIENT_FADE_S), ambientStash: null }, { ambient: false });
 }
 
 /** Replace the Look with undo + crossfade. */
 function changeLook(model: Model, look: Look, dur: number): Model {
   return {
     ...model,
-    undo: pushUndo(model.undo, model.state.look, false),
+    undo: pushUndo(model.undo, model.state.look, model.state.session.ambient),
     fade: startFade(fadeLook(model.fade, model.state.look), dur), // from what the live Look shows now
     state: { ...model.state, look },
   };
@@ -226,15 +252,18 @@ function cmd(model: Model, name: unknown, arg: unknown, env: Env): Result {
     case 'queue':
       return none(setSession(model, 'queued', arg ?? null, env));
     case 'randomize':
-      return none(changeLook(model, randomize(s.look, env.rng, group), xfade));
+      return none(changeLook(model, randomize(s.look, env.rng, group, s.session.ambient), xfade));
     case 'mutate':
-      return none(changeLook(model, mutate(s.look, env.rng, group), xfade));
+      return none(changeLook(model, mutate(s.look, env.rng, group, s.session.ambient), xfade));
     case 'reset':
-      return none(changeLook(model, resetLook(s.look, group), xfade));
+      return none(replaceLook(model, resetLook(s.look, group), xfade));
+    case 'ambient':
+      return none(toggleAmbient(model));
     case 'undo': {
       const { ring, entry } = popUndo(model.undo);
       if (!entry) return none();
-      const m = changeLook(model, entry.look, UNDO_FADE_S);
+      // an entry pushed while Ambient was on comes back as is; an older one is calmed if Ambient is on now
+      const m = entry.ambient ? changeLook(model, entry.look, UNDO_FADE_S) : replaceLook(model, entry.look, UNDO_FADE_S);
       return none({ ...m, undo: ring });
     }
     case 'savePreset': {
@@ -342,10 +371,16 @@ export class Persister {
   private calib: Calib | null = null;
   private look: Look | null = null;
   private lookSavedAt = -Infinity;
+  private stash: AmbientStash | null | undefined = undefined;
 
   constructor(private readonly storage: StorageLike | null) {}
 
-  update(state: State, nowMs: number): void {
+  /** `stash`: Model.ambientStash, written to its own key whenever it changes (`null` when Ambient is off). */
+  update(state: State, nowMs: number, stash: AmbientStash | null = null): void {
+    if (stash !== this.stash) {
+      if (this.stash !== undefined) safeSet(this.storage, STORAGE_KEYS.ambient, JSON.stringify(stash));
+      this.stash = stash;
+    }
     if (state.presets !== this.presets) {
       if (this.presets !== null) safeSet(this.storage, STORAGE_KEYS.presets, serialisePresets(state.presets));
       this.presets = state.presets;

@@ -3,12 +3,13 @@ import {
   Persister, initialModel, patchSession, recallPreset, reduce, renderLook, tick, withDefaultPresets, type Env, type Model,
 } from '../src/display/store';
 import { savePreset } from '../src/display/presets';
+import { AMBIENT_FADE_S, ambientLook } from '../src/display/ambient';
 import {
-  STORAGE_KEYS, defaultCalib, defaultLook, defaultSession, fallbackLook, serialiseCalib, serialiseLook, serialisePresets,
+  STORAGE_KEYS, defaultCalib, defaultLook, migrateZoomReact, defaultSession, fallbackLook, serialiseCalib, serialiseLook, serialisePresets,
   type StorageLike,
 } from '../src/shared/state';
 import { mulberry32 } from '../src/shared/math';
-import { paramDef } from '../src/shared/params';
+import { PARAMS, paramDef } from '../src/shared/params';
 
 const NOW = new Date(2026, 10, 19, 22, 0, 0).getTime();
 /** 12 baked shapes (layers 0–11) and one drawn shape `drawn:abc` on layer 12. */
@@ -192,7 +193,7 @@ describe('messages', () => {
       { t: 'setSession', key: 'zoomStop', value: false });
     expect(m.state.session).toEqual({
       autopilot: 1, reactMaster: 1.5, xfade: 8, autoAdvance: false, order: 'sequential', presetCycleMin: 5,
-      frozen: true, fallback: true, blackout: true, meltHold: true, holdPos: 0, queued: 4, live: false, zoomStop: false,
+      frozen: true, fallback: true, blackout: true, meltHold: true, holdPos: 0, queued: 4, live: false, zoomStop: false, ambient: false,
     });
     expect(apply(m, { t: 'setSession', key: 'queued', value: null }).state.session.queued).toBeNull();
   });
@@ -381,5 +382,112 @@ describe('shapes and live (B12)', () => {
     expect(gone.model.state.session.queued).toBeNull();
     expect(gone.effects).toEqual([{ t: 'seqForget', layer: 12 }]);
     expect(reduce(q, { t: 'shapeGone', layer: 3 }, env()).model.state.session.queued).toBe(12);
+  });
+});
+
+describe('Ambient (design §6)', () => {
+  const on = (m: Model = fresh()): Model => apply(m, { t: 'cmd', name: 'ambient' });
+
+  test('on: calms over 5 s whatever xfade says, stashes, pushes one undo entry tagged not-ambient', () => {
+    const m0 = apply(fresh(), { t: 'setSession', key: 'xfade', value: 1 });
+    const m = on(m0);
+    expect(m.state.session.ambient).toBe(true);
+    expect(m.fade?.dur).toBe(AMBIENT_FADE_S);
+    expect(m.state.look).toEqual(ambientLook(m0.state.look).look);
+    expect(m.ambientStash).toEqual(ambientLook(m0.state.look).stash);
+    expect(m.undo).toHaveLength(m0.undo.length + 1);
+    expect(m.undo.at(-1)).toEqual({ look: m0.state.look, ambient: false });
+  });
+
+  test('off: gives the original back over 5 s and clears the stash', () => {
+    const m0 = fresh();
+    const m = on(on(m0));
+    expect(m.state.session.ambient).toBe(false);
+    expect(m.ambientStash).toBeNull();
+    expect(m.fade?.dur).toBe(AMBIENT_FADE_S);
+    expect(m.state.look).toEqual(m0.state.look);
+  });
+
+  test('a reaction re-added by hand survives Off; the others come back', () => {
+    const m0 = fresh();
+    const m = on(apply(on(m0), { t: 'setParam', id: 'zoom', field: 'react', value: 0.2 }));
+    expect(m.state.look.params.zoom.react).toBe(0.2);
+    expect(m.state.look.params.glow.react).toBe(m0.state.look.params.glow.react);
+  });
+
+  test('recall (by hand and by the cycle) and reset come out calm; Ambient stays on', () => {
+    const look = defaultLook();
+    look.params.zoom.react = 0.4;
+    const withPreset = { ...fresh(), state: { ...fresh().state, presets: savePreset(new Array(16).fill(null), look, NOW).presets } };
+    const a = apply(on(withPreset), { t: 'cmd', name: 'loadPreset', arg: 0 });
+    expect(a.state.look.params.zoom.react).toBe(0);
+    expect(a.state.session.ambient).toBe(true);
+    expect(a.ambientStash?.react.zoom?.react).toBe(0.4);
+    const c = recallPreset(on(withPreset), 0, 8);
+    expect(c.state.look.params.zoom.react).toBe(0);
+    const r = apply(on(), { t: 'cmd', name: 'reset' });
+    expect(r.state.look.params.glow.react).toBe(0);
+    expect(r.state.session.ambient).toBe(true);
+  });
+
+  test('a group reset while on keeps the other groups owed; Off restores them', () => {
+    const m0 = fresh();
+    const m = on(apply(on(m0), { t: 'cmd', name: 'reset', arg: 'colour' }));
+    expect(m.state.look.params.zoom.react).toBe(m0.state.look.params.zoom.react);
+    expect(m.state.look.env.shape).toEqual(m0.state.look.env.shape);
+  });
+
+  test('undo while on: an ambient entry comes back as is, a pre-ambient one comes back calm', () => {
+    const m1 = apply(on(), { t: 'setParam', id: 'zoom', field: 'react', value: 0.3 }, { t: 'cmd', name: 'randomize' });
+    const u1 = apply(m1, { t: 'cmd', name: 'undo' });
+    expect(u1.state.look.params.zoom.react).toBe(0.3);
+    const u2 = apply(on(), { t: 'cmd', name: 'undo' });
+    expect(u2.state.look.params.glow.react).toBe(0);
+    expect(u2.state.session.ambient).toBe(true);
+  });
+
+  test('randomize while on leaves no reaction on low, beat or high', () => {
+    const m = apply(on(), { t: 'cmd', name: 'randomize' });
+    for (const def of PARAMS) {
+      const ps = m.state.look.params[def.id];
+      if (['low', 'beat', 'high'].includes(ps.band)) expect(ps.react).toBe(0);
+    }
+  });
+
+  test('save while on stores the calm Look; the stash is never in State', () => {
+    const m = apply(on(), { t: 'cmd', name: 'savePreset' });
+    expect(m.state.presets[0]?.look).toEqual(m.state.look);
+    expect(JSON.stringify(m.state)).not.toContain('ambientStash');
+  });
+
+  test('setSession cannot turn Ambient on', () => {
+    expect(apply(fresh(), { t: 'setSession', key: 'ambient', value: true }).state.session.ambient).toBe(false);
+  });
+
+  test('the stash is persisted and survives a reload; a corrupt value is ignored', () => {
+    const s = new MemStorage();
+    const p = new Persister(s);
+    const m0 = fresh();
+    p.update(m0.state, 0, m0.ambientStash);
+    const m = on(m0);
+    p.update(m.state, 5000, m.ambientStash);
+    expect(JSON.parse(s.getItem(STORAGE_KEYS.ambient) ?? 'null')).toEqual(m.ambientStash);
+    const b = initialModel(1, s).model;
+    expect(b.state.session.ambient).toBe(true);
+    expect(b.ambientStash).toEqual(m.ambientStash);
+    const off = on(m);
+    p.update(off.state, 10000, off.ambientStash);
+    expect(initialModel(1, s).model.state.session.ambient).toBe(false);
+    s.setItem(STORAGE_KEYS.ambient, '{"react": 3}');
+    expect(initialModel(1, s).model.state.session.ambient).toBe(false);
+  });
+
+  test('a v1 preset imported and recalled while on is migrated, calmed, and restored by Off (Review Focus 4)', () => {
+    const v1 = { version: 1, presets: [{ name: 'old', savedAt: 0, look: { params: { zoom: { base: 0.85, react: 0.5, band: 'low', thr: 0, lock: false } } } }] };
+    const m = apply(on(), { t: 'cmd', name: 'importPresets', arg: v1 }, { t: 'cmd', name: 'loadPreset', arg: 0 });
+    expect(m.state.look.v).toBe(2);
+    expect(m.state.look.params.zoom.react).toBe(0);
+    const back = on(m);
+    expect(back.state.look.params.zoom.react).toBeCloseTo(migrateZoomReact(0.5, 0.85), 9);
   });
 });

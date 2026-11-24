@@ -24,6 +24,7 @@ export function keyAction(key: string, session: Session | null): KeyAction {
     case 'm': return msg({ t: 'cmd', name: 'mutate' });
     case 'z': return msg({ t: 'cmd', name: 'undo' });
     case 's': return msg({ t: 'cmd', name: 'savePreset' });
+    case 'a': return msg({ t: 'cmd', name: 'ambient' });
     case 'd': return { kind: 'local', name: 'debug' };
     case 'Enter': return { kind: 'local', name: 'fullscreen' };
     default:

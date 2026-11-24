@@ -312,7 +312,7 @@ function frame(nowMs: number): void {
       hueOffset: fb ? 0 : ap.hueOffset, master, frame: frameNo++,
     });
   }
-  persister.update(model.state, nowMs);
+  persister.update(model.state, nowMs, model.ambientStash);
 
   const error = fatal ?? renderer?.error ?? audioError ?? (renderer ? null : 'WebGL context lost');
   if (model.state !== lastSentState && nowMs - lastStateSendMs >= STATE_SEND_MS) sendState();
@@ -336,7 +336,7 @@ async function boot(): Promise<void> {
   model = b.model;
   seq = new Sequencer(seed, model.state.look.options.holdBeats);
   booted = true;
-  persister.update(model.state, performance.now());
+  persister.update(model.state, performance.now(), model.ambientStash);
   if (b.needDefaultPresets) {
     try { model = withDefaultPresets(model, await fetchJson('presets/default.json')); } catch (e) { console.warn(e); }
   }

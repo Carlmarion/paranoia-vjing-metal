@@ -107,6 +107,7 @@ const beatLed = h('span', 'led beat', undefined, top);
 const bpmEl = h('span', 'stat', '— bpm', top);
 h('span', 'spacer', undefined, top);
 const liveBadge = h('span', 'livebadge', 'LIVE', top);
+const ambientBadge = h('span', 'livebadge ambient', 'AMBIENT', top);
 const freezeBtn = toggleBtn('Freeze', () => toggleSession('frozen'), top);
 const fallbackBtn = toggleBtn('Fallback', () => toggleSession('fallback'), top);
 const blackoutBtn = toggleBtn('Blackout', () => toggleSession('blackout'), top, 'danger');
@@ -315,6 +316,9 @@ const sessSliders = {
   reactMaster: numSlider(right, 'reactMaster', lin(...SESSION_RANGES.reactMaster), 's:reactMaster', (v) => ({ t: 'setSession', key: 'reactMaster', value: v }), ds.reactMaster),
   xfade: numSlider(right, 'xfade', lin(...SESSION_RANGES.xfade), 's:xfade', (v) => ({ t: 'setSession', key: 'xfade', value: v }), ds.xfade, { unit: 's' }),
 };
+const ambientRow = row('ambient', right);
+const ambientBtn = toggleBtn('Ambient (A)', () => cmd('ambient'), ambientRow);
+ambientBtn.title = 'calm the kick, beat and high reactions over 5 s; press again to give them back';
 const stopRow = row('stop', right);
 const zoomStopBtn = toggleBtn('Zoom stop', () => toggleSession('zoomStop'), stopRow);
 zoomStopBtn.title = 'sound and autopilot cannot push zoom or mirror shift past the window edge';
@@ -411,6 +415,7 @@ function applyState(msg: StateMsg): void {
   setOn(autoBtn, session.autoAdvance);
   setOn(meltHoldBtn, session.meltHold);
   setOn(zoomStopBtn, session.zoomStop);
+  setOn(ambientBtn, session.ambient);
   orderSeg.set(session.order);
   holdPos.set(session.holdPos);
   sessSliders.autopilot.set(session.autopilot);
@@ -427,6 +432,7 @@ function applyState(msg: StateMsg): void {
 
   applyCalib(c, msg.devices);
   liveBadge.classList.toggle('on', session.live);
+  ambientBadge.classList.toggle('on', session.ambient);
   draw.onSessionLive(session.live);
 }
 

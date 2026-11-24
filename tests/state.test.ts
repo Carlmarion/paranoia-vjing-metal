@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { keyAction } from '../src/shared/keys';
 import { fromNorm, paramDef, toNorm } from '../src/shared/params';
 import { ENV_GROUPS, LOOK_VERSION, defaultLook, migrateLook, neutralEnv, serialiseLook } from '../src/shared/state';
 import { clamp, clamp01 } from '../src/shared/math';
@@ -42,5 +43,12 @@ describe('Look.env migration (design §5.3)', () => {
   test('out-of-range numbers are clamped, wrong types fall back', () => {
     const look = migrateLook({ env: { shape: { attack: 9, sustain: -1, decay: 0, release: 'x' } } });
     expect(look.env.shape).toEqual({ attack: 2, sustain: 0, decay: 0.05, release: 0 });
+  });
+});
+
+describe('keys', () => {
+  test('A toggles Ambient', () => {
+    expect(keyAction('a', null)).toEqual({ kind: 'msg', msg: { t: 'cmd', name: 'ambient' } });
+    expect(keyAction('A', null)).toEqual({ kind: 'msg', msg: { t: 'cmd', name: 'ambient' } });
   });
 });
