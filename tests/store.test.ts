@@ -396,7 +396,7 @@ describe('Ambient (design §6)', () => {
     expect(m.state.look).toEqual(ambientLook(m0.state.look).look);
     expect(m.ambientStash).toEqual(ambientLook(m0.state.look).stash);
     expect(m.undo).toHaveLength(m0.undo.length + 1);
-    expect(m.undo.at(-1)).toEqual({ look: m0.state.look, ambient: false });
+    expect(m.undo.at(-1)).toEqual({ look: m0.state.look, ambient: false, stash: null });
   });
 
   test('off: gives the original back over 5 s and clears the stash', () => {
@@ -489,5 +489,40 @@ describe('Ambient (design §6)', () => {
     expect(m.state.look.params.zoom.react).toBe(0);
     const back = on(m);
     expect(back.state.look.params.zoom.react).toBeCloseTo(migrateZoomReact(0.5, 0.85), 9);
+  });
+});
+
+describe('Ambient: final review fixes', () => {
+  const on = (m: Model): Model => apply(m, { t: 'cmd', name: 'ambient' });
+  const withPresets = (...looks: ReturnType<typeof defaultLook>[]): Model => {
+    let presets = new Array(16).fill(null);
+    for (const l of looks) presets = savePreset(presets, l, NOW).presets;
+    const m = fresh();
+    return { ...m, state: { ...m.state, presets } };
+  };
+
+  test('recall → undo → off gives back the Look that was undone to, not the recalled preset', () => {
+    const b = defaultLook();
+    b.params.zoom.react = 0.5;
+    const m0 = withPresets(b);
+    const a = apply(m0, { t: 'setParam', id: 'zoom', field: 'react', value: 0.3 });
+    const m = on(apply(on(a), { t: 'cmd', name: 'loadPreset', arg: 0 }, { t: 'cmd', name: 'undo' }));
+    expect(m.state.look.params.zoom.react).toBe(0.3);
+  });
+
+  test('a recalled preset with no kick reaction does not inherit the previous one at Off', () => {
+    const b = defaultLook();
+    b.params.zoom.react = 0;
+    const m0 = apply(withPresets(b), { t: 'setParam', id: 'zoom', field: 'react', value: 0.3 });
+    const m = on(apply(on(m0), { t: 'cmd', name: 'loadPreset', arg: 0 }));
+    expect(m.state.look.params.zoom.react).toBe(0);
+  });
+
+  test('reset all while on starts a fresh stash; a group reset still merges', () => {
+    const a = apply(fresh(), { t: 'setParam', id: 'zoom', field: 'react', value: 0.3 });
+    const all = on(apply(on(a), { t: 'cmd', name: 'reset' }));
+    expect(all.state.look.params.zoom.react).toBe(defaultLook().params.zoom.react);
+    const group = on(apply(on(a), { t: 'cmd', name: 'reset', arg: 'colour' }));
+    expect(group.state.look.params.zoom.react).toBe(0.3);
   });
 });

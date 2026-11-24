@@ -6,6 +6,7 @@ import {
   type Look, type ParamState, type Preset,
 } from '../shared/state';
 import { clamp, clamp01, fract, gaussian, randInt, type Rng } from '../shared/math';
+import type { AmbientStash } from './ambient';
 
 /** Design §6: reactions on these bands are calmed by Ambient (kick, beat, highs). Mid and energy stay. */
 export const AMBIENT_BANDS: ReadonlySet<Band> = new Set<Band>(['low', 'beat', 'high']);
@@ -201,11 +202,11 @@ export function resetLook(look: Look, group?: Group): Look {
 
 // ---------- undo ----------
 
-/** Design §6.2: each entry records whether it was pushed while Ambient was on. */
-export interface UndoEntry { look: Look; ambient: boolean; }
+/** Design §6.2: each entry records whether it was pushed while Ambient was on, and what Ambient owed then. */
+export interface UndoEntry { look: Look; ambient: boolean; stash: AmbientStash | null; }
 
-export function pushUndo(ring: readonly UndoEntry[], look: Look, ambient: boolean): UndoEntry[] {
-  const out = [...ring, { look, ambient }];
+export function pushUndo(ring: readonly UndoEntry[], look: Look, ambient: boolean, stash: AmbientStash | null = null): UndoEntry[] {
+  const out = [...ring, { look, ambient, stash }];
   return out.length > UNDO_SIZE ? out.slice(out.length - UNDO_SIZE) : out;
 }
 

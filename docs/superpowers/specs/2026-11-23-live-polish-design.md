@@ -210,7 +210,7 @@ In the header of the shape, line and colour panels: a **mini curve** (about 64×
 - **Off:** for each stashed param whose react is still exactly 0 and whose band is still the stashed band, put the stashed react back; for each group whose env still equals `AMBIENT_ENV`, put the stashed env back. Anything Carl changed meanwhile is kept. Crossfade 5 s, clear the stash, `ambient = false`.
 - **While on:**
   - Manual edits are free. This is how reactions are re-added.
-  - **Preset recall** (by hand or by the cycle) and **Reset** pass through the transform (merging into the stash, 6.1) before they are applied. Ambient ends only with the button.
+  - **Preset recall** (by hand or by the cycle) and **Reset** pass through the transform before they are applied. Ambient ends only with the button. *(Amended after the final review, 2026-11-24: only a **group** Reset merges into the stash; a whole new Look — recall, Reset all, a pre-ambient undo entry — starts a fresh stash, otherwise Off could give a recalled preset the previous Look's kick. Undo entries also carry the stash of their moment.)*
   - **Undo:** an entry pushed while Ambient was on is applied as it is, so reactions Carl re-added by hand come back untouched. An entry from before Ambient passes through the transform. Consequence: Undo right after pressing Ambient changes nothing visible.
   - With Ambient off, an entry pushed while it was on is applied as it is (a calm Look).
   - **Randomize:** afterwards, every param whose band is `low`, `beat` or `high` gets `react = 0`.

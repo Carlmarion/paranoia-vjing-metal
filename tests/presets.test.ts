@@ -300,7 +300,7 @@ describe('tagged undo (design §6.2)', () => {
     const ring = pushUndo(pushUndo([], a, false), a, true);
     expect(ring.map((e) => e.ambient)).toEqual([false, true]);
     const { ring: rest, entry } = popUndo(ring);
-    expect(entry).toEqual({ look: a, ambient: true });
+    expect(entry).toEqual({ look: a, ambient: true, stash: null });
     expect(rest).toHaveLength(1);
     expect(popUndo([]).entry).toBeNull();
   });

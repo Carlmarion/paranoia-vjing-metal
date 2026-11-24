@@ -83,6 +83,7 @@ export class Sequencer {
   phase: SeqPhase = 'hold';
   a = 0;
   private started = false;
+  private stepped = false;
   b = 0;
   /** Linear morph progress 0…1. */
   p = 0;
@@ -293,12 +294,23 @@ export class Sequencer {
     this.startMorph(target, ctx, beatPeriod);
   }
 
-  /** First frame: nothing is on screen yet, so an unchecked start layer is swapped for the first pooled shape. */
+  /**
+   * The start layer may be unchecked. On the first frame nothing is on screen yet, so it is swapped for the first
+   * pooled shape. If the pool is still empty then (drawn shapes still loading), the first time it is not, the hold
+   * ends at once and auto-advance melts to a pooled shape.
+   */
   private start(ctx: SeqContext): void {
+    const firstFrame = !this.stepped;
+    this.stepped = true;
+    if (ctx.pool.length === 0) return;
     this.started = true;
-    if (ctx.pool.length === 0 || ctx.pool.includes(this.a) || this.phase !== 'hold') return;
-    this.a = this.b = ctx.pool[0];
-    this.recent.splice(0, this.recent.length, this.a);
+    if (ctx.pool.includes(this.a) || this.phase !== 'hold') return;
+    if (firstFrame) {
+      this.a = this.b = ctx.pool[0];
+      this.recent.splice(0, this.recent.length, this.a);
+    } else {
+      this.remaining = 0;
+    }
   }
 
   /** Target choice (B7.2): queued if set, else by order, from the pool. Null when there is nothing to choose. */

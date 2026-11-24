@@ -172,6 +172,16 @@ describe('the pool (B12.3)', () => {
     expect(q.shown().slice(0, 5)).toEqual([2, 4, 6, 2, 4]);
   });
 
+  test('an empty pool at first (drawn shapes still loading) melts to a pooled shape as soon as one exists', () => {
+    const s = new Sim(9, 12, { holdBeats: 128, morphBeats: 4 });
+    s.pool = [];
+    s.run(1);
+    expect(s.outs.at(-1)?.motifA).toBe(0);
+    s.pool = [4];
+    s.run(5);
+    expect(s.shown()).toEqual([0, 4]);
+  });
+
   test('the first frame starts on a pooled shape when the start layer is unchecked', () => {
     const s = new Sim(9, 12, { holdBeats: 128, morphBeats: 4 });
     s.pool = [3, 5];

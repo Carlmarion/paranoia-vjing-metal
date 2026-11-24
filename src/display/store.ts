@@ -111,12 +111,13 @@ export function recallPreset(model: Model, slot: number, dur: number): Model {
 }
 
 /**
- * A whole new Look (recall, reset, a pre-ambient undo entry): while Ambient is on it is calmed first and what
- * it owes merges into the stash (design §6.1), so every path in stays calm and every path out gives back.
+ * A whole new Look (recall, reset, a pre-ambient undo entry): while Ambient is on it is calmed first, so every
+ * path in stays calm. A group Reset merges what it owes into the stash (design §6.1: the other groups are still
+ * owed theirs); a whole new Look starts a fresh stash, so Off gives back that Look's reactions and nothing older.
  */
-function replaceLook(model: Model, look: Look, dur: number): Model {
+function replaceLook(model: Model, look: Look, dur: number, merge = false): Model {
   if (!model.state.session.ambient) return changeLook(model, look, dur);
-  const calm = ambientLook(look, model.ambientStash);
+  const calm = ambientLook(look, merge ? model.ambientStash : null);
   return { ...changeLook(model, calm.look, dur), ambientStash: calm.stash };
 }
 
@@ -135,7 +136,7 @@ function toggleAmbient(model: Model): Model {
 function changeLook(model: Model, look: Look, dur: number): Model {
   return {
     ...model,
-    undo: pushUndo(model.undo, model.state.look, model.state.session.ambient),
+    undo: pushUndo(model.undo, model.state.look, model.state.session.ambient, model.ambientStash),
     fade: startFade(fadeLook(model.fade, model.state.look), dur), // from what the live Look shows now
     state: { ...model.state, look },
   };
@@ -256,14 +257,17 @@ function cmd(model: Model, name: unknown, arg: unknown, env: Env): Result {
     case 'mutate':
       return none(changeLook(model, mutate(s.look, env.rng, group, s.session.ambient), xfade));
     case 'reset':
-      return none(replaceLook(model, resetLook(s.look, group), xfade));
+      return none(replaceLook(model, resetLook(s.look, group), xfade, group !== undefined));
     case 'ambient':
       return none(toggleAmbient(model));
     case 'undo': {
       const { ring, entry } = popUndo(model.undo);
       if (!entry) return none();
-      // an entry pushed while Ambient was on comes back as is; an older one is calmed if Ambient is on now
-      const m = entry.ambient ? changeLook(model, entry.look, UNDO_FADE_S) : replaceLook(model, entry.look, UNDO_FADE_S);
+      // an entry pushed while Ambient was on comes back as is, with what Ambient owed then;
+      // an older one is calmed (fresh stash) if Ambient is on now
+      const ambientNow = s.session.ambient;
+      const m = !entry.ambient ? replaceLook(model, entry.look, UNDO_FADE_S)
+        : { ...changeLook(model, entry.look, UNDO_FADE_S), ...(ambientNow ? { ambientStash: entry.stash } : {}) };
       return none({ ...m, undo: ring });
     }
     case 'savePreset': {
