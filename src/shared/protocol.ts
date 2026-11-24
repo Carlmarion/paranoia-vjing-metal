@@ -102,8 +102,8 @@ export interface MetersMsg {
   motifA: number; motifB: number; morphT: number; holdRemaining: number; fps: number;
   /** Design §4.5: normalised [orange, red] starts on the zoom and mirrorShift sliders (1 = never). */
   zones: { zoom: [number, number]; mirrorShift: [number, number] };
-  /** Design §5.4: per envelope group, the level and stage (0 idle, 1 rising, 2 holding, 3 falling) of its lead param. */
-  env: Record<EnvGroup, { level: number; stage: 0 | 1 | 2 | 3 }>;
+  /** Design §5.4: per envelope group, the hits since the previous meters message (one trigger line each). */
+  envHits: Record<EnvGroup, number>;
   error?: string;
 }
 /** `free`: empty layer slots; `persistent`: false when IndexedDB is unavailable (shapes last for the session only). */

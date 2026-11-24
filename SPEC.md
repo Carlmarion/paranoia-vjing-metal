@@ -175,6 +175,15 @@ interface Look {
     holdBeats: 0 | 16 | 32 | 64 | 128;  // 0 = flow: always melting
     morphBeats: 4 | 8 | 16 | 32 | 64;
   };
+  env: Record<'shape' | 'line' | 'colour', Env>;   // reaction envelope per group (B4.5); missing → neutral
+}
+
+// B4.5. Neutral { attack: 0, sustain: 1, decay: 1, release: 0 } returns its input exactly.
+interface Env {
+  attack: number;   // 0…2 s, time constant of the rise
+  sustain: number;  // 0…1, level the effect sags to while the sound continues (1 = no fatigue)
+  decay: number;    // 0.05…10 s, how fast it sags (and recovers)
+  release: number;  // 0…20 s, time constant of the tail
 }
 
 // Session: live performance state. Never stored in presets.
@@ -243,6 +252,7 @@ value  = fromNorm(scale == 'wrap' ? fract(u) : clamp01(u))
 - `lock` excludes a param from drift, randomize and mutate.
 - A `—` in the driftPeriod column means the param has no drift (its driftAmp is 0).
 - `bandValue` for `beat` is the beat pulse (B6.4); for `energy` it is `energy30`.
+- For the **shape**, **line** and **colour** groups, `gate` is replaced by the output `y` of that group's envelope (B4.5): `u = u_base + drift + reactMaster × react × y`. Melt and inner use `gate` directly.
 - After all params are computed, the **stop** (B4.4) may hold `zoom` and `mirrorShift` back.
 
 ### B4.2 The table
@@ -311,6 +321,21 @@ for Rx in (Rink, Rglow):
 **Stop** (`session.zoomStop`, default on, not in fallback). For `x` in zoom and mirrorShift, with `x_hand = base` and `x_full` the B4.1 value: `x_final = x_full ≤ x_hand ? x_full : max(x_hand, min(x_full, x_limit))`, with the ink limit. Order: mirrorShift first (only with a mirror on; zoom at its hand value), then zoom (with the final mirrorShift). Sound and drift can move outward only up to the red line, never below the hand; inward motion is free. Other effects (a thickness kick, tilt drift) can still nudge a line already at the edge over it. With the stop off, values are exactly B4.1.
 
 **Zones.** Each frame the Display computes, with the other params at rest (base + drift, no sound), the normalised slider positions where orange and red start on zoom and mirrorShift (1 = never; mirrorShift `[1, 1]` without a mirror), and sends them in `meters.zones` (B9).
+
+### B4.5 Reaction envelope (`shared/envelope.ts`)
+
+Per param in the shape, line and colour groups, a charge `c` (starts 1) and an output `y` (starts 0); the settings are the group's `look.env[group]`. Each frame, with `g` the gate value:
+```
+x      = g × c                                   // the charge before draining: a hit's first frame is full at any frame rate
+target = 1 − (1 − sustain) × g
+τc     = target < c ? decay : max(decay, release)   // refilling takes at least as long as the tail
+c     += (target − c) × (1 − exp(−dt / τc))
+τ      = x > y ? attack : release
+y      = τ ≤ 0 ? x : y + (x − y) × (1 − exp(−dt / τ))
+```
+A sustained sound gives a sharp start, a sag to `sustain`, and a tail of `release`. Repeat hits inside the tail land weaker, because the charge has not refilled (fatigue). A sag falls at the `release` speed. Neutral settings give `y = g` exactly.
+
+**Hits.** Per group, the strongest gate among its params with `react ≠ 0` and a band counts one **hit** when it rises above 0.15 after having fallen below 0.05 (a held sound is one hit; wobbling around the threshold is not counted twice). The Display sends the hits since its previous meters message in `meters.envHits`.
 
 ## B5. Shader (`shader.frag`, `#version 300 es`)
 
@@ -480,7 +505,8 @@ The live layer (`LIVE = MAX_LAYERS − 1`) is a motif like any other for the sha
 - **Default Look options:** `meltMode` 1 (fuse), `mirrorX` false, `mirrorY` false, `hueJumpEvery` 0, `hueJumpAmt` 0.25, `holdBeats` 32, `morphBeats` 16.
 - **Randomize(group?)** for every unlocked param (optionally only one group): `base` uniform in the rand range (log-uniform for log params); `react` uniform in 0…0.6 × `reactScale`, sign positive; `band` = table default with probability 0.5, else uniform among low, mid, high, beat, energy; `thr` uniform in 0…0.5. Options: `meltMode` uniform; `mirrorX`, `mirrorY` true with probability 0.25 each. Never touches `brightness`, `holdBeats`, `morphBeats`, `hueJumpEvery`.
 - **Mutate:** for every unlocked param, `base_norm += N(0, 0.08)`, `react += N(0, 0.1 × reactScale)`, `thr += N(0, 0.05)`, all clamped. Options unchanged. This is the tool for walking around a sweet spot.
-- **Reset(group?)**: back to table defaults.
+- **Reset(group?)**: back to table defaults. Reset of shape, line or colour also sets that group's envelope to neutral; Reset all sets all three.
+- **Envelopes** are part of the Look: recall crossfades their four numbers linearly; randomize and mutate never touch them.
 - **Undo:** ring of 30 Looks, pushed before randomize, mutate, reset and recall. Undo crossfades over 1 s.
 - Randomize and mutate also crossfade over `session.xfade`.
 - **Export** downloads `ferro-presets-YYYYMMDD-HHMM.json`. **Import** validates and merges into empty slots.
@@ -493,6 +519,7 @@ The live layer (`LIVE = MAX_LAYERS − 1`) is a motif like any other for the sha
 { t: 'hello' }
 { t: 'setParam', id: ParamId, field: 'base' | 'react' | 'band' | 'thr' | 'lock', value }
 { t: 'setOption', key, value }  { t: 'setSession', key, value }  { t: 'setCalib', key, value }
+{ t: 'setEnv', group: 'shape' | 'line' | 'colour', key: keyof Env, value: number }   // clamped to the B3 ranges
 { t: 'cmd', name: 'next' | 'prev' | 'random' | 'goto' | 'queue' | 'randomize' | 'mutate' | 'reset' | 'undo'
               | 'savePreset' | 'loadPreset' | 'deletePreset' | 'renamePreset' | 'importPresets'
               | 'replay', arg? }                                    // replay: arg = ShapeKey of a drawn shape
@@ -510,6 +537,7 @@ The live layer (`LIVE = MAX_LAYERS − 1`) is a motif like any other for the sha
 { t: 'meters', audio: AudioFrame, values: number[31],              // effective param values, normalised
   motifA, motifB, morphT, holdRemaining, fps,                      // 20×/s; doubles as heartbeat
   zones: { zoom: [orange, red], mirrorShift: [orange, red] },      // B4.4, normalised slider positions
+  envHits: { shape | line | colour: number },                      // B4.5 hits since the previous meters message
   error?: string }
 { t: 'library', version: number, shapes: ShapeMeta[], free: number, persistent: boolean }
                          // on hello and whenever the library changes; free = empty slots; persistent = false without IndexedDB
@@ -538,6 +566,11 @@ Dark, low-luminance UI (the laptop must not light the room): background `#0b0b0d
 - Melt hold toggle with a wide scrub slider (`holdPos`).
 
 **Centre: one panel per group** (shape, melt, line, inner, colour). Header has Randomize, Mutate and Reset for that group. One row per param:
+
+The shape, line and colour headers also hold a **mini curve** (64×18 px) of the group's envelope (B4.5) and a ▾ arrow; the arrow (or a click on the mini curve) opens the **envelope editor** under the header, closed by default:
+- The curve is drawn by `envCurve`, the code the Display runs: the response to "full on through attack and sustain, then off". Soft fill under it. Three sections (attack, sustain, release) separated by thin yellow markers; each section's time axis spans its parameter's whole range (2 s, 10 s, 20 s) on a square-root scale, so short times keep room.
+- Three dots: **A** (sideways: attack), **S** (sideways: decay; up/down: sustain), **R** (sideways: release). Each dot sits at its time constant on the curve. Shift-drag = fine (×0.1). Double-click a dot = back to neutral. Values are printed under the curve.
+- **Trigger lines**, like grains in a granulator: each hit in `meters.envHits` spawns a thin accent line at the start of the curve. A line of age `t` sits where the curve is `t` seconds after its start, on the same axis (through attack, then sustain), from the baseline up to the curve, and fades with a 3 s time constant. Many hits make a cloud of lines; the rate over the last 3 s is printed (`hits/s`). The mini curve shows the lines too.
 
 `label` · **base** slider · **react** slider (−1…+1, centre detent) · **band** select · **thr** slider · **lock** checkbox
 
@@ -665,6 +698,7 @@ Same result as `tools/bake_sdf.py` (B2.2), computed in a Web Worker so the proje
 - **presets:** save → export → import round-trip is identical; randomize and mutate never change locked params and never leave rand or min…max ranges; crossfade endpoints are exact; undo restores the previous Look; hue interpolates the short way.
 - **store:** every message type; unknown messages are ignored; a corrupt `localStorage` value falls back to defaults.
 - **state:** a v1 Look keeps the same zoom push at its base; a v2 Look is not converted again; a v1 zoom without a react keeps the default.
+- **envelope:** neutral settings return the input exactly for any `dt`; attack is the rise time constant; a sustained sound starts at 1 and sags to `sustain`; release is the tail time constant; a second hit inside the tail peaks lower, and after 60 s of quiet the same; 30 and 120 fps give the same peak (1) and curves within 2%; `dt` 0 or 5 keeps `c` and `y` in 0…1. With neutral envelopes 600 random frames equal B4.1 exactly; inner never uses the envelope; `setEnv` clamps and ignores bad input; `lerpLook` interpolates envelopes; randomize and mutate leave them alone; reset restores neutral per group.
 - **reach:** fill grows with zoom and mirrorShift; mirrorShift counts only on a mirrored axis and does not scale with zoom; tilt raises fill; the bisected limit gives fill 1 within 1e-3; a wider or taller window never lowers the limit; radius 0, glow 0 and a zero-size window give finite results. **Stop:** sound never raises zoom past the limit; the hand past it is kept; negative react still pulls in; zones do not move with the kick; stop off = B4.1. `inkRadius` of a known disc within 0.015.
 - **strokes:** smoothing keeps a straight raw line straight and never lags the raw point by more than one sample spacing; a point under R6 gives 6 points at the same radius, 60° apart, one group; X mirror negates x only; coverage of a known disc is within 2% of its area; slicing a path at `q × L` returns a prefix whose length is `q × L` within 1e-6, monotonic in `q`, and the whole list at `q = 1`; mid-group every copy is cut at the same length.
 - **raster:** `y = +0.8` maps to the top rows; one-point strokes draw a dot; eraser strokes paint `destination-out` in order; ink = alpha ≥ 128.
@@ -764,6 +798,7 @@ M0 passed on 14 Nov on the venue chain (mixer → Focusrite → Display → proj
 | Reaction always saturated | Raise `thr` first, then lower `react` |
 | Constant strobing | Lower `react` on `brightness`; raise `hueJumpEvery` |
 | Shapes turn to mush | Lower `warpAmt`, `spikeAmp`; raise `warpScale` |
+| Too jumpy on slow or ambient music | Open the group's curve: drag S down (fatigue) and R right (longer tail) |
 | Shape or glow leaves the window | Watch the zoom row: orange = glow touches, red = line touches. Keep **Zoom stop** on so the kick never crosses red |
 | Lines too thin on the projector | Raise `thickness` base to 0.01–0.02 |
 | Melt looks like a crossfade | Use melt mode fuse; raise `linger`; raise `meltK` |

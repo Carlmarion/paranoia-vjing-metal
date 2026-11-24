@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { envCurve, envStep, type EnvState } from '../src/display/envelope';
+import { envCurve, envStep, type EnvState } from '../src/shared/envelope';
 import { neutralEnv, type Env } from '../src/shared/state';
 import { mulberry32 } from '../src/shared/math';
 
@@ -108,5 +108,23 @@ describe('envCurve', () => {
     expect(c.sustain[63]).toBe(1);
     expect(c.release[0]).toBeGreaterThan(0.9);
     expect(c.release[63]).toBeLessThan(0.05);
+  });
+});
+
+describe('envCurve on fixed spans (the editor axis)', () => {
+  const spans = { attack: 2, sustain: 10, release: 20 };
+
+  test('samples sit on a square-root time axis: the last sample is the span end', () => {
+    const c = envCurve({ attack: 0.5, sustain: 1, decay: 1, release: 0 }, 32, spans);
+    // last attack sample is at t = 2 s: 1 − e^(−4)
+    expect(c.attack[31]).toBeCloseTo(1 - Math.exp(-4), 3);
+    // sample i is at t = span × ((i + 1) / n)²: sample 15 at 0.5 s → 1 − 1/e
+    expect(c.attack[15]).toBeCloseTo(1 - 1 / Math.E, 2);
+  });
+
+  test('a shorter attack makes a steeper curve on the same axis', () => {
+    const slow = envCurve({ attack: 1, sustain: 1, decay: 1, release: 0 }, 32, spans);
+    const fast = envCurve({ attack: 0.1, sustain: 1, decay: 1, release: 0 }, 32, spans);
+    expect(fast.attack[8]).toBeGreaterThan(slow.attack[8]);
   });
 });

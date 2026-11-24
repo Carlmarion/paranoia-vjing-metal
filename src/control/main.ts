@@ -5,14 +5,15 @@ import { PARAMS, PARAM_INDEX, GROUPS, fromNorm, toNorm, type Band, type Group, t
 import {
   BANDS, HOLD_BEATS, MORPH_BEATS, HUE_JUMP_EVERY, MELT_MODES, ORDERS, PRESET_CYCLE_MIN, PRESET_SLOTS,
   REACT_RANGE, THR_RANGE, HUE_JUMP_AMT_RANGE, SESSION_RANGES, CALIB_RANGES,
-  defaultSession, defaultCalib, defaultOptions, serialisePresets, parseJson,
-  type Session, type Calib, type LookOptions, type MeltMode, type HoldBeats, type MorphBeats, type HueJumpEvery, type Order,
+  ENV_GROUPS, defaultSession, defaultCalib, defaultOptions, isEnvGroup, neutralEnv, serialisePresets, parseJson,
+  type EnvGroup, type Session, type Calib, type LookOptions, type MeltMode, type HoldBeats, type MorphBeats, type HueJumpEvery, type Order,
 } from '../shared/state';
 import { bandValue, createBroadcastTransport, type ControlMsg, type StateMsg, type MetersMsg } from '../shared/protocol';
 import { keyAction, isTyping } from '../shared/keys';
 import { h, button, lin, row, fmt, fileStamp, download, Slider, Seg, Meter, type Mapping } from './ui';
 import { ShapesColumn } from './shapes';
 import { DrawModal, type DrawDoc } from './draw';
+import { EnvEditor } from './envelope';
 
 const OFFLINE_AFTER_MS = 1000;
 const HELLO_EVERY_MS = 1000;
@@ -221,10 +222,12 @@ function paramRow(def: ParamDef, parent: HTMLElement): ParamRow {
   return { def, base, react, thr, band, lock };
 }
 
+const envEditors = {} as Record<EnvGroup, EnvEditor>;
 for (const g of GROUPS) {
   const panel = h('div', 'panel', undefined, centre);
   const head = h('div', 'phead', undefined, panel);
   h('h2', '', g, head);
+  if (isEnvGroup(g)) envEditors[g] = envEditor(g, head, panel);
   h('span', 'spacer', undefined, head);
   button('Randomize', () => cmd('randomize', g), head);
   button('Mutate', () => cmd('mutate', g), head);
@@ -232,6 +235,19 @@ for (const g of GROUPS) {
   const cols = h('div', 'prow pcols', undefined, panel);
   for (const c of ['', 'base', 'react', 'band', 'thr', 'lk']) h('span', '', c, cols);
   for (const def of PARAMS) if (def.group === (g as Group)) paramRows[PARAMS.indexOf(def)] = paramRow(def, panel);
+}
+
+/** Design §5.4: mini curve + arrow in the header, the editor under it (closed by default). */
+function envEditor(g: EnvGroup, head: HTMLElement, panel: HTMLElement): EnvEditor {
+  const ed = new EnvEditor({
+    onInput: (key, value) => queueSend(`e:${g}:${key}`, { t: 'setEnv', group: g, key, value }),
+    onReset: (key) => send({ t: 'setEnv', group: g, key, value: neutralEnv()[key] }),
+  });
+  head.append(ed.mini);
+  const arrow = button('▾', () => { ed.toggle(); arrow.classList.toggle('on', ed.isOpen); }, head, 'env-arrow');
+  arrow.title = 'reaction envelope';
+  panel.append(ed.el);
+  return ed;
 }
 
 // ---------- right: performance ----------
@@ -377,6 +393,8 @@ function applyState(msg: StateMsg): void {
     rowBands[i] = ps.band;
   }
 
+  for (const g of ENV_GROUPS) envEditors[g].set(look.env[g]);
+
   const o: LookOptions = look.options;
   holdSeg.set(o.holdBeats);
   morphSeg.set(o.morphBeats);
@@ -446,6 +464,7 @@ function applyMeters(m: MetersMsg): void {
     r.thr.setBar(thrMap.toU(bandValue(rowBands[i], a)));
   }
 
+  for (const g of ENV_GROUPS) envEditors[g].addHits(m.envHits[g]);
   paramRows[PARAM_INDEX.zoom]?.base.setZones(...m.zones.zoom);
   paramRows[PARAM_INDEX.mirrorShift]?.base.setZones(...m.zones.mirrorShift);
 

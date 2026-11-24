@@ -4,8 +4,8 @@ import { bandValue, type AudioFrame } from '../shared/protocol';
 import type { Look, ParamState, Session } from '../shared/state';
 import { clamp01, fract, valueNoise1D } from '../shared/math';
 import { limit, stop, type ReachIn, type ReachParam } from './reach';
-import { envStage, envStep, type EnvStage, type EnvState } from './envelope';
-import { isEnvGroup, perEnvGroup, type EnvGroup } from '../shared/state';
+import { envStep, type EnvState } from '../shared/envelope';
+import { ENV_GROUPS, isEnvGroup, perEnvGroup, type EnvGroup } from '../shared/state';
 
 export const PHASE_WRAP = 1000;
 
@@ -52,15 +52,15 @@ export interface Modulation {
   spinPhase: number;
   /** Design §5.2: envelope state per param (used by the shape, line and colour groups). */
   env: EnvState[];
-  /** Per envelope group: the reacting param with the highest output, for the dashboard's live dot. */
-  envLead: Record<EnvGroup, EnvLead>;
+  /** Per envelope group: hits counted since the caller last reset them (the dashboard draws one line per hit). */
+  envHits: Record<EnvGroup, number>;
+  /** Per envelope group: the gate has dropped below HIT_OFF since the last hit. */
+  envArmed: Record<EnvGroup, boolean>;
   /** Values with base + drift only (no sound), on each param's own scale. */
   rest: Float32Array;
   /** Design §4.5: normalised slider positions where orange and red start (1 = never). */
   zones: Zones;
 }
-
-export interface EnvLead { level: number; stage: EnvStage; }
 
 export type Zone = [orange: number, red: number];
 export interface Zones { zoom: Zone; mirrorShift: Zone; }
@@ -76,13 +76,15 @@ export interface Geom {
 }
 
 const NO_ZONE: Zone = [1, 1];
-const idleLead = (): EnvLead => ({ level: 0, stage: 0 });
+/** A hit: the strongest gate of a group's reacting params rises above HIT_ON after falling below HIT_OFF. */
+export const HIT_ON = 0.15;
+export const HIT_OFF = 0.05;
 
 export function createModulation(): Modulation {
   return {
     values: new Float32Array(PARAM_COUNT), norm: new Float32Array(PARAM_COUNT), warpPhase: 0, spikePhase: 0, wavePhase: 0, spinPhase: 0,
     rest: new Float32Array(PARAM_COUNT), zones: { zoom: NO_ZONE, mirrorShift: NO_ZONE },
-    env: Array.from({ length: PARAM_COUNT }, () => ({ c: 1, y: 0 })), envLead: perEnvGroup(idleLead),
+    env: Array.from({ length: PARAM_COUNT }, () => ({ c: 1, y: 0 })), envHits: perEnvGroup(() => 0), envArmed: perEnvGroup(() => true),
   };
 }
 
@@ -106,23 +108,23 @@ export function modulate(
   m: Modulation, look: Look, session: Session, frame: AudioFrame, driftT: number, dt: number, geom?: Geom,
 ): void {
   const driftScale = session.fallback ? 0 : session.autopilot;
-  m.envLead = perEnvGroup(idleLead);
+  const groupGate = perEnvGroup(() => 0);
   for (let i = 0; i < PARAM_COUNT; i++) {
     const def = PARAMS[i];
     const ps = look.params[def.id];
     let level = gate(bandValue(ps.band, frame), ps.thr);
     if (isEnvGroup(def.group)) {
       const s = m.env[i];
-      const x = envStep(s, level, look.env[def.group], dt);
+      if (ps.react !== 0 && ps.band !== 'none') groupGate[def.group] = Math.max(groupGate[def.group], level);
+      envStep(s, level, look.env[def.group], dt);
       level = s.y;
-      const lead = m.envLead[def.group];
-      if (ps.react !== 0 && ps.band !== 'none' && s.y >= lead.level) m.envLead[def.group] = { level: s.y, stage: envStage(x, s.y) };
     }
     const u = normAt(def, ps, i, level, driftScale, session.reactMaster, driftT);
     m.norm[i] = u;
     m.values[i] = fromNorm(def, u);
     m.rest[i] = fromNorm(def, normAt(def, ps, i, 0, driftScale, session.reactMaster, driftT));
   }
+  countHits(m, groupGate);
   if (geom) {
     if (session.zoomStop && !session.fallback) applyStop(m, look, geom);
     m.zones = zones(m.rest, look, geom);
@@ -138,6 +140,13 @@ export function modulate(
   m.spinPhase = spin.base === 0 && spin.react === 0
     ? glideUpright(m.spinPhase, dt)
     : fract(m.spinPhase + (m.values[I_SPIN] / 60) * dt);
+}
+
+function countHits(m: Modulation, groupGate: Record<EnvGroup, number>): void {
+  for (const g of ENV_GROUPS) {
+    if (m.envArmed[g] && groupGate[g] > HIT_ON) { m.envHits[g]++; m.envArmed[g] = false; }
+    else if (groupGate[g] < HIT_OFF) m.envArmed[g] = true;
+  }
 }
 
 const I_ZOOM = PARAM_INDEX.zoom;

@@ -1,8 +1,8 @@
 // Display window (SPEC B11): owns all state, audio, autopilot and rendering.
 import { PARAM_INDEX } from '../shared/params';
 import { clamp, streamRng } from '../shared/math';
-import { dateSeed, getStorage } from '../shared/state';
-import { DISPLAY_MSG_TYPES, MAX_LAYERS, createBroadcastTransport, type DeviceInfo, type Manifest, type Msg } from '../shared/protocol';
+import { ENV_GROUPS, dateSeed, getStorage } from '../shared/state';
+import { DISPLAY_MSG_TYPES, MAX_LAYERS, createBroadcastTransport, type DeviceInfo, type Manifest, type MetersMsg, type Msg } from '../shared/protocol';
 import { inkRadius } from '../shared/sdf';
 import { drawStrokes } from '../shared/raster';
 import type { Stroke } from '../shared/strokes';
@@ -67,6 +67,12 @@ function measureAtlas(buf: ArrayBuffer, m: Manifest): void {
 function uploadLayer(layer: number, half: Uint16Array): void {
   if (manifest && layer >= 0 && layer < MAX_LAYERS) radius[layer] = inkRadius(half, manifest.cell);
   renderer?.uploadLayer(layer, half);
+}
+/** The hits counted since the last meters message; resets the counters. */
+function takeHits(): MetersMsg['envHits'] {
+  const out = { ...mod.envHits };
+  for (const g of ENV_GROUPS) mod.envHits[g] = 0;
+  return out;
 }
 function geomOf(motifA: number, motifB: number, morphT: number): Geom {
   const morphing = morphT > 0 && morphT < 1;
@@ -314,7 +320,7 @@ function frame(nowMs: number): void {
     lastMetersMs = nowMs;
     transport.send({
       t: 'meters', audio, values: Array.from(mod.norm), motifA, motifB, morphT,
-      holdRemaining: so.holdRemaining, fps, zones: mod.zones, env: mod.envLead, ...(error ? { error } : {}),
+      holdRemaining: so.holdRemaining, fps, zones: mod.zones, envHits: takeHits(), ...(error ? { error } : {}),
     });
   }
   debug.update(dt, {

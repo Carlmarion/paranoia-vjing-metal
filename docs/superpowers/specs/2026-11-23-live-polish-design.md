@@ -180,7 +180,7 @@ In the header of the shape, line and colour panels: a **mini curve** (about 64×
 - **The curve is real:** it is drawn by running `envelope.ts` on a test input (full on, then off). No hand-drawn approximation.
 - **Three dots:** A (drag sideways: attack), S (sideways: decay, up/down: sustain), R (sideways: release). Each dot's travel covers its full range. Double-click a dot resets it to neutral. Shift-drag is fine, as on the sliders.
 - **Three sections** separated by thin yellow vertical markers. Each section has its own time scale (the ranges differ by 10×); the current values are printed small under the axis (`0.3 s · 50% / 2 s · 4 s`).
-- **Live dot:** `MetersMsg` gets `env: Record<EnvGroup, { level: number; stage: 0 | 1 | 2 | 3 }>` for the param with the highest `y` in the group among those with `react ≠ 0` and a band. Stage: 0 idle, 1 rising (`x > y` and `y < 0.95 × x`), 2 holding, 3 falling. The dot sits on the matching section of the curve at height `level`, and its brightness follows `level`. It also runs on the mini curve.
+- **Trigger lines** (changed after Carl's live check, 2026-11-24: the first version's single live dot flickered, because several params compete for it). The Display counts a **hit** per group when the strongest gate of its reacting params rises above 0.15 after falling below 0.05, and sends the count since the last meters message in `MetersMsg.envHits: Record<EnvGroup, number>`. Each hit spawns a thin line at the start of the curve that travels along the time axis in real time (attack, then sustain), reaching up to the curve, fading with a 3 s time constant: a granulator-like cloud showing how often the effect fires. A `hits/s` rate (last 3 s) is printed. The mini curve shows the lines too.
 - A soft fill under the curve. No other decoration.
 
 ## 6. Piece 3 — Ambient mode (SPEC B3, B8, B9, B10, B11)
@@ -265,7 +265,7 @@ reactScale?: number    // zoom: 0.5
 { t: 'setSession', key: 'zoomStop', value: boolean }
 // MetersMsg additions
 zones: { zoom: [number, number]; mirrorShift: [number, number] }
-env: Record<EnvGroup, { level: number; stage: 0 | 1 | 2 | 3 }>
+envHits: Record<EnvGroup, number>
 hueOffset: number
 ```
 

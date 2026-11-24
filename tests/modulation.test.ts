@@ -303,28 +303,35 @@ describe('envelope stage (design §5.2)', () => {
     expect(m.values[PARAM_INDEX.waveAmt]).toBeCloseTo(0.4, 6);
   });
 
-  test('the lead of a group reports its level and stage', () => {
+  test('each crossing of the threshold is one hit; a held sound is one hit (Carl: trigger lines)', () => {
     const look = kickLook();
-    look.env.shape = { attack: 0.5, sustain: 1, decay: 1, release: 1 };
+    look.params.zoom.thr = 0.2;
     const m = createModulation();
-    modulate(m, look, noDrift(), frame({ low: 1 }), 0, 1 / 60);
-    expect(m.envLead.shape.stage).toBe(1);
-    for (let i = 0; i < 600; i++) modulate(m, look, noDrift(), frame({ low: 1 }), 0, 1 / 60);
-    expect(m.envLead.shape.stage).toBe(2);
-    expect(m.envLead.shape.level).toBeGreaterThan(0.99);
-    modulate(m, look, noDrift(), frame({ low: 0 }), 0, 1 / 60);
-    expect(m.envLead.shape.stage).toBe(3);
-    for (let i = 0; i < 1200; i++) modulate(m, look, noDrift(), frame({ low: 0 }), 0, 1 / 60);
-    expect(m.envLead.shape.stage).toBe(0);
-    expect((m.envLead as Record<string, unknown>).inner).toBeUndefined();
+    for (let k = 0; k < 5; k++) {
+      for (let i = 0; i < 6; i++) modulate(m, look, noDrift(), frame({ low: 1 }), 0, 1 / 60);
+      for (let i = 0; i < 20; i++) modulate(m, look, noDrift(), frame({ low: 0 }), 0, 1 / 60);
+    }
+    expect(m.envHits.shape).toBe(5);
+    for (let i = 0; i < 300; i++) modulate(m, look, noDrift(), frame({ low: 1 }), 0, 1 / 60);
+    expect(m.envHits.shape).toBe(6);
   });
 
-  test('params with react 0 or band none do not lead', () => {
+  test('wobbling around the threshold does not count twice (hysteresis)', () => {
+    const look = kickLook();
+    look.params.zoom.thr = 0;
+    const m = createModulation();
+    for (let i = 0; i < 60; i++) modulate(m, look, noDrift(), frame({ low: i % 2 ? 0.3 : 0.1 }), 0, 1 / 60);
+    expect(m.envHits.shape).toBe(1);
+  });
+
+  test('params with react 0 or band none do not count; inner has no hits', () => {
     const look = defaultLook();
     for (const def of PARAMS) look.params[def.id].react = 0;
     look.params.thickness = { base: 0, react: 0, band: 'low', thr: 0, lock: false };
     const m = createModulation();
     modulate(m, look, noDrift(), frame({ low: 1 }), 0, 1 / 60);
-    expect(m.envLead.line).toEqual({ level: 0, stage: 0 });
+    expect(m.envHits.line).toBe(0);
+    expect((m.envHits as Record<string, unknown>).inner).toBeUndefined();
   });
+
 });

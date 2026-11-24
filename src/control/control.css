@@ -129,6 +129,14 @@ body.nostate .cols { opacity: .35; pointer-events: none; }
 .panel { border: 1px solid var(--line); border-radius: 4px; background: var(--panel); padding: 0 10px 4px; margin: 8px 0; }
 .phead { display: flex; align-items: center; gap: 6px; min-height: 34px; border-bottom: 1px solid var(--line); }
 .phead h2 { margin: 0; color: var(--text); }
+/* envelope (design §5.4) */
+.env-mini { width: 64px; height: 18px; margin-left: 6px; cursor: pointer; opacity: .9; }
+.env-arrow { height: 20px; padding: 0 5px; font-size: 10px; }
+.env-arrow.on { transform: rotate(180deg); }
+.env-editor { padding: 8px 0 4px; border-bottom: 1px solid var(--line); }
+.env-canvas { display: block; touch-action: none; }
+.env-foot { display: flex; gap: 8px; padding-top: 2px; }
+.env-values, .env-rate { color: var(--dim); font-size: 10px; }
 .prow {
   display: grid; grid-template-columns: 112px minmax(0, 1.4fr) minmax(0, 1fr) 72px minmax(0, 1fr) 20px;
   align-items: center; column-gap: 12px; min-height: var(--row);
