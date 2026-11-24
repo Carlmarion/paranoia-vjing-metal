@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { keyAction } from '../src/shared/keys';
 import { fromNorm, paramDef, toNorm } from '../src/shared/params';
-import { ENV_GROUPS, LOOK_VERSION, defaultLook, migrateLook, neutralEnv, serialiseLook } from '../src/shared/state';
+import { ENV_GROUPS, LOOK_VERSION, defaultLook, defaultSession, migrateLook, neutralEnv, serialiseLook } from '../src/shared/state';
 import { clamp, clamp01 } from '../src/shared/math';
 
 describe('Look v2 zoom migration (design §4.1)', () => {
@@ -50,5 +50,11 @@ describe('keys', () => {
   test('A toggles Ambient', () => {
     expect(keyAction('a', null)).toEqual({ kind: 'msg', msg: { t: 'cmd', name: 'ambient' } });
     expect(keyAction('A', null)).toEqual({ kind: 'msg', msg: { t: 'cmd', name: 'ambient' } });
+  });
+});
+
+describe('session defaults', () => {
+  test('the autopilot starts at 0: no drift after a reload until it is raised by hand', () => {
+    expect(defaultSession().autopilot).toBe(0);
   });
 });

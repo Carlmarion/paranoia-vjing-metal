@@ -188,7 +188,7 @@ interface Env {
 
 // Session: live performance state. Never stored in presets.
 interface Session {
-  autopilot: number;      // 0…1, default 0.5
+  autopilot: number;      // 0…1, default 0 (drift off until raised by hand)
   reactMaster: number;    // 0…2, default 1
   xfade: number;          // seconds, 0…8, default 3
   autoAdvance: boolean;   // default true

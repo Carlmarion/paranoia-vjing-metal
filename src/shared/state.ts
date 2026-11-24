@@ -154,7 +154,7 @@ export function fallbackLook(): Look {
 
 export function defaultSession(): Session {
   return {
-    autopilot: 0.5, reactMaster: 1, xfade: 3, autoAdvance: true, order: 'random', presetCycleMin: 0,
+    autopilot: 0, reactMaster: 1, xfade: 3, autoAdvance: true, order: 'random', presetCycleMin: 0,
     frozen: false, fallback: false, blackout: false, meltHold: false, holdPos: 0, queued: null, live: false, zoomStop: true, ambient: false,
   };
 }
