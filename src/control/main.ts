@@ -232,6 +232,13 @@ const hueStrip = new HueStrip({
     queueSend('p:hue:base', { t: 'setParam', id: 'hue', field: 'base', value: hue });
     queueSend('p:hueDepth:base', { t: 'setParam', id: 'hueDepth', field: 'base', value: hueDepth });
   },
+  onReact: (react) => {
+    for (const id of ['hue', 'hueDepth'] as const) {
+      queueSend(`p:${id}:react`, { t: 'setParam', id, field: 'react', value: react[id] });
+      // a reaction on band 'none' would never fire: pulling a marker away gives the row the kick
+      if (react[id] !== 0 && last?.state.look.params[id].band === 'none') send({ t: 'setParam', id, field: 'band', value: 'low' });
+    }
+  },
 });
 for (const g of GROUPS) {
   const panel = h('div', 'panel', undefined, centre);
@@ -408,7 +415,10 @@ function applyState(msg: StateMsg): void {
   }
 
   for (const g of ENV_GROUPS) envEditors[g].set(look.env[g]);
-  hueStrip.set(look.params.hue.base, look.params.hueDepth.base);
+  hueStrip.set(
+    look.params.hue.base, look.params.hueDepth.base,
+    { hue: look.params.hue.react, hueDepth: look.params.hueDepth.react }, session.reactMaster,
+  );
 
   const o: LookOptions = look.options;
   holdSeg.set(o.holdBeats);

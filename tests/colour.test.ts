@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { CORE_REF_DEPTH, handlesFromParams, liveSpan, paramsFromHandles } from '../src/shared/colour';
+import { CORE_REF_DEPTH, handlesFromParams, hitParams, liveSpan, paramsFromHandles, reactsFromHit } from '../src/shared/colour';
 import { hsv2rgb, mulberry32 } from '../src/shared/math';
 
 const near = (a: number, b: number, eps = 1e-9): boolean => Math.abs(a - b) < eps;
@@ -70,5 +70,32 @@ describe('liveSpan', () => {
     expect(near(liveSpan(0.55, 0.35, 0, 0.25).from, 0.73)).toBe(true);
     expect(liveSpan(0.5, 1, 0.07, 0).length).toBe(1);
     expect(liveSpan(0.5, -1, 0.07, 0).length).toBe(-1);
+  });
+});
+
+describe('hit colours (ghost handles)', () => {
+  test('a full hit moves hue by react turns and hueDepth by react × 2 (its normalised span), times reactMaster', () => {
+    const p = hitParams({ hue: 0.55, hueDepth: 0.35 }, { hue: 0.1, hueDepth: 0.2 }, 1);
+    expect(p.hue).toBeCloseTo(0.65, 9);
+    expect(p.hueDepth).toBeCloseTo(0.75, 9);
+    expect(hitParams({ hue: 0.95, hueDepth: 0.9 }, { hue: 0.1, hueDepth: 0.2 }, 1).hue).toBeCloseTo(0.05, 9);
+    expect(hitParams({ hue: 0.5, hueDepth: 0.9 }, { hue: 0, hueDepth: 0.2 }, 1).hueDepth).toBe(1);
+    expect(hitParams({ hue: 0.55, hueDepth: 0.35 }, { hue: 0.1, hueDepth: 0.2 }, 0.5).hue).toBeCloseTo(0.6, 9);
+  });
+
+  test('reacts from a hit round-trip, the short way round', () => {
+    const rest = { hue: 0.9, hueDepth: -0.2 };
+    for (const master of [0.5, 1, 2]) {
+      const react = { hue: 0.15, hueDepth: 0.1 };
+      const back = reactsFromHit(rest, hitParams(rest, react, master), master);
+      expect(back?.hue).toBeCloseTo(0.15, 9);
+      expect(back?.hueDepth).toBeCloseTo(0.1, 9);
+    }
+    expect(reactsFromHit(rest, { hue: 0.1, hueDepth: -0.2 }, 1)?.hue).toBeCloseTo(0.2, 9);
+  });
+
+  test('reactMaster 0 gives no reacts; results are clamped to −1…1', () => {
+    expect(reactsFromHit({ hue: 0, hueDepth: 0 }, { hue: 0.2, hueDepth: 0.5 }, 0)).toBeNull();
+    expect(reactsFromHit({ hue: 0, hueDepth: -1 }, { hue: 0.4, hueDepth: 1 }, 0.25)).toEqual({ hue: 1, hueDepth: 1 });
   });
 });

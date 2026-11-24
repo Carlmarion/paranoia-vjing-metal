@@ -36,3 +36,26 @@ export function liveSpan(hueEff: number, hueDepthEff: number, thicknessEff: numb
   const length = clamp(hueDepthEff * (GLOW_K + 10 * depth), -1, 1);
   return { from: fract(hueEff + hueOffset - GLOW_K * hueDepthEff), length };
 }
+
+/** hue and hueDepth on their own scales (hue: wrap 0…1; hueDepth: lin −1…1, so its normalised span is 2). */
+export interface HuePair { hue: number; hueDepth: number; }
+const DEPTH_SPAN = 2;
+
+/** Where a full hit (gate 1) takes hue and hueDepth: B4.1 with level 1, no drift. */
+export function hitParams(rest: HuePair, react: HuePair, reactMaster: number): HuePair {
+  return {
+    hue: fract(rest.hue + reactMaster * react.hue),
+    hueDepth: clamp(rest.hueDepth + reactMaster * react.hueDepth * DEPTH_SPAN, -1, 1),
+  };
+}
+
+/** The reacts that make a full hit land on `hit` (hue the short way round); null when reactMaster is 0. */
+export function reactsFromHit(rest: HuePair, hit: HuePair, reactMaster: number): HuePair | null {
+  if (!(reactMaster > 0)) return null;
+  let arc = fract(hit.hue - rest.hue);
+  if (arc > 0.5) arc -= 1;
+  return {
+    hue: clamp(arc / reactMaster, -1, 1),
+    hueDepth: clamp((hit.hueDepth - rest.hueDepth) / DEPTH_SPAN / reactMaster, -1, 1),
+  };
+}
