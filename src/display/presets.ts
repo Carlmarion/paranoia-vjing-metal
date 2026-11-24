@@ -7,6 +7,9 @@ import {
 } from '../shared/state';
 import { clamp, clamp01, fract, gaussian, randInt, type Rng } from '../shared/math';
 
+/** Design §6: reactions on these bands are calmed by Ambient (kick, beat, highs). Mid and energy stay. */
+export const AMBIENT_BANDS: ReadonlySet<Band> = new Set<Band>(['low', 'beat', 'high']);
+
 export const UNDO_SIZE = 30;
 export const UNDO_FADE_S = 1;
 
@@ -143,8 +146,8 @@ const RANDOM_BANDS: Band[] = ['low', 'mid', 'high', 'beat', 'energy'];
 export const RANDOM_REACT_MAX = 0.6;
 export const RANDOM_THR_MAX = 0.5;
 
-/** B8 randomize. Options are randomized only for a full (no-group) randomize. */
-export function randomize(look: Look, rng: Rng, group?: Group): Look {
+/** B8 randomize. Options are randomized only for a full (no-group) randomize. `ambient`: no reaction on AMBIENT_BANDS. */
+export function randomize(look: Look, rng: Rng, group?: Group, ambient = false): Look {
   const out = cloneLook(look);
   for (const def of PARAMS) {
     const ps = out.params[def.id];
@@ -154,6 +157,7 @@ export function randomize(look: Look, rng: Rng, group?: Group): Look {
     ps.react = rng() * RANDOM_REACT_MAX * (def.reactScale ?? 1);
     ps.band = rng() < 0.5 ? def.band : RANDOM_BANDS[randInt(rng, RANDOM_BANDS.length)];
     ps.thr = rng() * RANDOM_THR_MAX;
+    if (ambient && AMBIENT_BANDS.has(ps.band)) ps.react = 0;
   }
   if (!group) {
     out.options.meltMode = randInt(rng, 3) as 0 | 1 | 2;
@@ -165,14 +169,15 @@ export function randomize(look: Look, rng: Rng, group?: Group): Look {
 
 export const MUTATE_SD = { base: 0.08, react: 0.1, thr: 0.05 } as const;
 
-/** B8 mutate: small gaussian steps around the current Look. Options unchanged. */
-export function mutate(look: Look, rng: Rng, group?: Group): Look {
+/** B8 mutate: small gaussian steps around the current Look. Options unchanged. `ambient`: calmed reactions stay 0. */
+export function mutate(look: Look, rng: Rng, group?: Group, ambient = false): Look {
   const out = cloneLook(look);
   for (const def of PARAMS) {
     const ps = out.params[def.id];
     if (ps.lock || (group && def.group !== group)) continue;
     ps.base = fromNorm(def, clamp01(toNorm(def, ps.base) + gaussian(rng) * MUTATE_SD.base));
-    ps.react = clamp(ps.react + gaussian(rng) * MUTATE_SD.react * (def.reactScale ?? 1), REACT_RANGE[0], REACT_RANGE[1]);
+    const calmed = ambient && ps.react === 0 && AMBIENT_BANDS.has(ps.band);
+    if (!calmed) ps.react = clamp(ps.react + gaussian(rng) * MUTATE_SD.react * (def.reactScale ?? 1), REACT_RANGE[0], REACT_RANGE[1]);
     ps.thr = clamp(ps.thr + gaussian(rng) * MUTATE_SD.thr, THR_RANGE[0], THR_RANGE[1]);
   }
   return out;
@@ -196,12 +201,15 @@ export function resetLook(look: Look, group?: Group): Look {
 
 // ---------- undo ----------
 
-export function pushUndo(ring: readonly Look[], look: Look): Look[] {
-  const out = [...ring, look];
+/** Design §6.2: each entry records whether it was pushed while Ambient was on. */
+export interface UndoEntry { look: Look; ambient: boolean; }
+
+export function pushUndo(ring: readonly UndoEntry[], look: Look, ambient: boolean): UndoEntry[] {
+  const out = [...ring, { look, ambient }];
   return out.length > UNDO_SIZE ? out.slice(out.length - UNDO_SIZE) : out;
 }
 
-export function popUndo(ring: readonly Look[]): { ring: Look[]; look: Look | null } {
-  if (ring.length === 0) return { ring: [], look: null };
-  return { ring: ring.slice(0, -1), look: ring[ring.length - 1] };
+export function popUndo(ring: readonly UndoEntry[]): { ring: UndoEntry[]; entry: UndoEntry | null } {
+  if (ring.length === 0) return { ring: [], entry: null };
+  return { ring: ring.slice(0, -1), entry: ring[ring.length - 1] };
 }

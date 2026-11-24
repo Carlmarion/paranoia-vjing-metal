@@ -228,7 +228,7 @@ describe('messages', () => {
     const m1 = apply(m0, { t: 'cmd', name: 'randomize' });
     expect(m1.state.look).not.toEqual(look0);
     expect(m1.fade?.dur).toBe(2);
-    expect(m1.undo.at(-1)).toBe(look0);
+    expect(m1.undo.at(-1)?.look).toBe(look0);
     expect(renderLook(m1)).toEqual(look0); // the fade starts from what was on screen
     const m2 = apply(m1, { t: 'cmd', name: 'mutate', arg: 'colour' });
     expect(m2.undo).toHaveLength(2);

@@ -12,7 +12,7 @@ import { clamp, type Rng } from '../shared/math';
 import type { SeqCommand } from './sequencer';
 import {
   UNDO_FADE_S, cloneLook, deletePreset, fadeLook, importPresets, mutate, popUndo, pushUndo, randomize,
-  renamePreset, resetLook, savePreset, startFade, stepFade, type Fade,
+  renamePreset, resetLook, savePreset, startFade, stepFade, type Fade, type UndoEntry,
 } from './presets';
 
 export interface Model {
@@ -20,7 +20,7 @@ export interface Model {
   /** Running crossfade towards state.look, or null. */
   fade: Fade | null;
   /** Undo ring (B8), newest last. */
-  undo: Look[];
+  undo: UndoEntry[];
   /** Slot last saved or recalled. */
   currentPreset: number | null;
 }
@@ -109,7 +109,7 @@ export function recallPreset(model: Model, slot: number, dur: number): Model {
 function changeLook(model: Model, look: Look, dur: number): Model {
   return {
     ...model,
-    undo: pushUndo(model.undo, model.state.look),
+    undo: pushUndo(model.undo, model.state.look, false),
     fade: startFade(fadeLook(model.fade, model.state.look), dur), // from what the live Look shows now
     state: { ...model.state, look },
   };
@@ -232,9 +232,9 @@ function cmd(model: Model, name: unknown, arg: unknown, env: Env): Result {
     case 'reset':
       return none(changeLook(model, resetLook(s.look, group), xfade));
     case 'undo': {
-      const { ring, look } = popUndo(model.undo);
-      if (!look) return none();
-      const m = changeLook(model, look, UNDO_FADE_S);
+      const { ring, entry } = popUndo(model.undo);
+      if (!entry) return none();
+      const m = changeLook(model, entry.look, UNDO_FADE_S);
       return none({ ...m, undo: ring });
     }
     case 'savePreset': {

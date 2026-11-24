@@ -244,13 +244,13 @@ describe('crossfade', () => {
 describe('undo', () => {
   test('restores the previous Look; ring holds 30', () => {
     const a = lookedUp();
-    let ring = pushUndo([], a);
-    const { ring: r2, look } = popUndo(ring);
-    expect(look).toBe(a);
+    let ring = pushUndo([], a, false);
+    const { ring: r2, entry } = popUndo(ring);
+    expect(entry?.look).toBe(a);
     expect(r2).toEqual([]);
-    for (let i = 0; i < 40; i++) ring = pushUndo(ring, defaultLook());
+    for (let i = 0; i < 40; i++) ring = pushUndo(ring, defaultLook(), false);
     expect(ring.length).toBe(UNDO_SIZE);
-    expect(popUndo([]).look).toBeNull();
+    expect(popUndo([]).entry).toBeNull();
   });
 });
 
@@ -291,5 +291,17 @@ describe('envelopes in the Look (design §5.3)', () => {
     const all = resetLook(a);
     for (const g of ENV_GROUPS) expect(all.env[g]).toEqual(neutralEnv());
     expect(resetLook(a, 'inner').env).toEqual(a.env);
+  });
+});
+
+describe('tagged undo (design §6.2)', () => {
+  test('entries carry the ambient flag', () => {
+    const a = defaultLook();
+    const ring = pushUndo(pushUndo([], a, false), a, true);
+    expect(ring.map((e) => e.ambient)).toEqual([false, true]);
+    const { ring: rest, entry } = popUndo(ring);
+    expect(entry).toEqual({ look: a, ambient: true });
+    expect(rest).toHaveLength(1);
+    expect(popUndo([]).entry).toBeNull();
   });
 });
