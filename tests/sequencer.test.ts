@@ -163,13 +163,22 @@ describe('the pool (B12.3)', () => {
     const s = new Sim(9, 12, { holdBeats: 16, morphBeats: 4 });
     s.pool = [1, 3, 5, 7, 9];
     s.run(300);
-    const seq = s.shown().slice(1);
+    const seq = s.shown();
     expect(seq.length).toBeGreaterThan(20);
-    for (const m of seq) expect(s.pool).toContain(m);
+    for (const m of seq) expect(s.pool).toContain(m); // the very first shape too (Carl's bug, 2026-11-24)
     const q = new Sim(9, 12, { holdBeats: 16, morphBeats: 4 }, { order: 'sequential' });
     q.pool = [2, 4, 6];
     q.run(80);
-    expect(q.shown().slice(0, 5)).toEqual([0, 2, 4, 6, 2]);
+    expect(q.shown().slice(0, 5)).toEqual([2, 4, 6, 2, 4]);
+  });
+
+  test('the first frame starts on a pooled shape when the start layer is unchecked', () => {
+    const s = new Sim(9, 12, { holdBeats: 128, morphBeats: 4 });
+    s.pool = [3, 5];
+    expect(s.step().motifA).toBe(3);
+    const ok = new Sim(9, 12, { holdBeats: 128, morphBeats: 4 });
+    ok.pool = [0, 5];
+    expect(ok.step().motifA).toBe(0);
   });
 
   test('an empty pool never starts a morph; a pool of one outside A goes there once', () => {
@@ -178,6 +187,7 @@ describe('the pool (B12.3)', () => {
     e.run(60);
     expect(e.outs.every((o) => o.phase === 'hold' && o.motifA === 0)).toBe(true);
     const one = new Sim(9, 12, { holdBeats: 16, morphBeats: 4 });
+    one.step(); // A = 0 is on screen; then the pool changes to one shape outside it
     one.pool = [4];
     one.run(60);
     expect(one.shown()).toEqual([0, 4]);

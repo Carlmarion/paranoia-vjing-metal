@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from 'vitest';
-import { Library, type BakeService, type LibraryDeps, type ShapeDB } from '../src/display/library';
+import { Library, storedDisabled, type BakeService, type LibraryDeps, type ShapeDB } from '../src/display/library';
 import { LIVE_LAYER, MAX_LAYERS, type DisplayMsg, type LibraryMsg } from '../src/shared/protocol';
 import { STORAGE_KEYS, type StorageLike } from '../src/shared/state';
 import type { InternalMsg } from '../src/display/store';
@@ -289,5 +289,31 @@ describe('replay (B12.6)', () => {
     expect(counts.length).toBeLessThanOrEqual(11);
     expect(counts.at(-1)).toBe(10); // q = 1: the whole drawing
     for (let i = 1; i < counts.length; i++) expect(counts[i]).toBeGreaterThanOrEqual(counts[i - 1]);
+  });
+});
+
+describe('the pool before IndexedDB answers (Carl bug, 2026-11-24)', () => {
+  test('unchecked shapes stay out of the pool while the database is still loading', () => {
+    const storage = new MemStorage();
+    storage.setItem(STORAGE_KEYS.pool, JSON.stringify(['baked:0', 'baked:2']));
+    const db = new MemDB();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const load = db.loadAll.bind(db);
+    db.loadAll = async () => { await gate; return load(); };
+    const r = rig({ bakedCount: 4, db, storage });
+    const booting = r.lib.boot();
+    expect(r.lib.pool()).toEqual([1, 3]);
+    release();
+    return booting.then(() => expect(r.lib.pool()).toEqual([1, 3]));
+  });
+
+  test('storedDisabled reads the unchecked keys, ignoring junk', () => {
+    const storage = new MemStorage();
+    storage.setItem(STORAGE_KEYS.pool, JSON.stringify(['baked:1', 7, 'drawn:x']));
+    expect([...storedDisabled(storage)]).toEqual(['baked:1', 'drawn:x']);
+    storage.setItem(STORAGE_KEYS.pool, 'nope');
+    expect([...storedDisabled(storage)]).toEqual([]);
+    expect([...storedDisabled(null)]).toEqual([]);
   });
 });

@@ -15,7 +15,7 @@ import { listDevices, openInput, parseSource, type AudioInput } from './audio/in
 import {
   initialModel, patchSession, Persister, recallPreset, reduce, renderLook, tick, withDefaultPresets, type Model, type ShapeLookup,
 } from './store';
-import { Library } from './library';
+import { Library, storedDisabled } from './library';
 import { WorkerBaker } from './baker';
 import { openShapeDB } from './shapedb';
 import { Sequencer } from './sequencer';
@@ -82,7 +82,11 @@ function geomOf(motifA: number, motifB: number, morphT: number): Geom {
     ax: canvas.width / short, ay: canvas.height / short, morphing,
   };
 }
-const bakedPool = (): number[] => Array.from({ length: manifest?.count ?? 0 }, (_, i) => i);
+/** Before the library is up: the baked shapes, minus the ones unchecked in storage. */
+const bakedPool = (): number[] => {
+  const off = storedDisabled(storage);
+  return Array.from({ length: manifest?.count ?? 0 }, (_, i) => i).filter((i) => !off.has(`baked:${i}`));
+};
 let fatal: string | null = null;
 let audioError: string | null = null;
 

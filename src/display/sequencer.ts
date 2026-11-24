@@ -82,6 +82,7 @@ export const SPEEDUP_S = 1;
 export class Sequencer {
   phase: SeqPhase = 'hold';
   a = 0;
+  private started = false;
   b = 0;
   /** Linear morph progress 0…1. */
   p = 0;
@@ -151,6 +152,7 @@ export class Sequencer {
     const beatPeriod = virtual ? VIRTUAL_BEAT_S : frame.beatPeriod;
     const patch: Partial<Session> = {};
     const { session, linger } = ctx;
+    if (!this.started) this.start(ctx);
 
     // B7.4 melt hold
     if (session.meltHold && this.mode === 'off') {
@@ -289,6 +291,14 @@ export class Sequencer {
     }
     if (target === null || target === this.a) { this.poppingPrev = false; return; }
     this.startMorph(target, ctx, beatPeriod);
+  }
+
+  /** First frame: nothing is on screen yet, so an unchecked start layer is swapped for the first pooled shape. */
+  private start(ctx: SeqContext): void {
+    this.started = true;
+    if (ctx.pool.length === 0 || ctx.pool.includes(this.a) || this.phase !== 'hold') return;
+    this.a = this.b = ctx.pool[0];
+    this.recent.splice(0, this.recent.length, this.a);
   }
 
   /** Target choice (B7.2): queued if set, else by order, from the pool. Null when there is nothing to choose. */

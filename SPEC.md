@@ -468,6 +468,7 @@ Everything counts in beats. A real onset is one beat. When `silent`, or no onset
 - **HOLD(A):** `remaining = holdBeats`, minus 1 per beat. At 0 (if `autoAdvance` and not `frozen` and not `meltHold`) → MORPH. With `holdBeats` 0 (flow) the next morph starts on the frame after landing, so the motifs melt continuously; each motif is reached for an instant, where the eased curve slows to zero speed.
 - **MORPH(A → B):** `progress += dt / (morphBeats × beatPeriod)`, with `beatPeriod` sampled when the morph starts. At 1 → A = B, HOLD.
 - Target choice: `queued` if set; else `random` (seeded, never one of the last 3 shown; relax to "not the current" when the pool has ≤ 4 shapes) or `sequential` (library order). Both choose from the **pool**: the layers of the enabled shapes (B12.3), in library order. A shape unchecked while it is A stays on screen until the next morph. With an empty pool no morph starts; with a pool of one shape and A outside it, the morph goes there once.
+- **Start:** the sequencer starts on layer 0; on its first frame, if layer 0 is not in the pool and the pool is not empty, it starts on the first pooled shape instead (nothing is on screen yet, so nothing pops).
 - Eased value sent to the shader:
 ```
 S(x)    = x² (3 − 2x)
@@ -654,7 +655,7 @@ A faint (25% grey) rendering of another shape under the ink, as a tracing guide 
 - `shapeSave` with an `id` re-bakes into the same layer. If that shape is on screen the picture updates on upload; that is intended.
 - `shapeDelete` of the shape on screen: the layer is cleared to blank after the next morph away from it; until then it stays visible. A deleted shape is removed from the pool and the history immediately.
 - `shapeDuplicate` creates a copy named `<name> copy` and answers with its strokes so the modal can open it.
-- **Pool (checkboxes):** `enabled` per shape, stored in `ferro.pool.v1` as the list of disabled keys. Baked and drawn shapes alike. Only the pool is used by `random`, `sequential`, auto-advance and `queued` picking; `goto` and the tiles still reach every shape (B7.2).
+- **Pool (checkboxes):** `enabled` per shape, stored in `ferro.pool.v1` as the list of disabled keys. Baked and drawn shapes alike. Only the pool is used by `random`, `sequential`, auto-advance and `queued` picking; `goto` and the tiles still reach every shape (B7.2). The disabled keys are read from storage when the library is created, before IndexedDB answers, and the baked-only pool the Display uses until the library exists honours them too: an unchecked shape is never chosen, even right after a reload.
 - Thumbnails: the Display renders 160×160 PNG data URLs with `raster.ts` (white ink on transparent, like the bake's thumbs) when a drawn shape is saved, and sends them in `library`. Baked thumbs are the files in `sdf/thumbs/`.
 - Boot: open IndexedDB, load all drawn shapes, bake them in the worker in creation order and upload each on arrival; the Display renders from the baked atlas meanwhile. Send `library` after the first upload and after every change (`version` increments).
 - At boot the pool, history and `queued` are validated against the library; unknown keys are dropped.
