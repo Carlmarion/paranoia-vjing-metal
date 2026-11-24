@@ -320,7 +320,7 @@ function frame(nowMs: number): void {
     lastMetersMs = nowMs;
     transport.send({
       t: 'meters', audio, values: Array.from(mod.norm), motifA, motifB, morphT,
-      holdRemaining: so.holdRemaining, fps, zones: mod.zones, envHits: takeHits(), ...(error ? { error } : {}),
+      holdRemaining: so.holdRemaining, fps, zones: mod.zones, envHits: takeHits(), hueOffset: fb ? 0 : ap.hueOffset, ...(error ? { error } : {}),
     });
   }
   debug.update(dt, {

@@ -105,6 +105,8 @@ export interface MetersMsg {
   zones: { zoom: [number, number]; mirrorShift: [number, number] };
   /** Design §5.4: per envelope group, the hits since the previous meters message (one trigger line each). */
   envHits: Record<EnvGroup, number>;
+  /** Design §7.2: the hue-jump offset sent to the shader (0 in fallback), turns. */
+  hueOffset: number;
   error?: string;
 }
 /** `free`: empty layer slots; `persistent`: false when IndexedDB is unavailable (shapes last for the session only). */

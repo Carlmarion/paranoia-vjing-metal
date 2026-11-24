@@ -70,3 +70,12 @@ export function gaussian(rng: Rng): number {
 export function randInt(rng: Rng, n: number): number {
   return Math.min(n - 1, Math.floor(rng() * n));
 }
+
+/** HSV → RGB, all 0…1: the same formula as `hsv2rgb` in shader.frag. */
+export function hsv2rgb(h: number, s: number, v: number): [number, number, number] {
+  const ch = (k: number): number => {
+    const p = Math.abs(fract(h + k) * 6 - 3);
+    return v * (1 + (clamp(p - 1, 0, 1) - 1) * s);
+  };
+  return [ch(0), ch(2 / 3), ch(1 / 3)];
+}
