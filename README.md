@@ -19,7 +19,7 @@ Drawings go in `art/png/01.png … 12.png` (rules in SPEC B2.1). Then:
 npm run bake
 ```
 
-With no PNG in `art/png/`, the bake uses `art/placeholders/` (regenerate those with `.venv/bin/python tools/make_placeholders.py`). The bake prints warnings but never stops on them. Output goes to `public/sdf/` and is committed.
+With no PNG in `art/png/`, the bake uses `art/placeholders/`, which now holds a single test shape, the target (`01.png`); the other shapes are drawn in the app. (`.venv/bin/python tools/make_placeholders.py` regenerates all 12 original placeholders; delete 02–12 again before baking if you run it.) The bake prints warnings but never stops on them. Output goes to `public/sdf/` and is committed.
 
 ## Run
 
