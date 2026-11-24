@@ -10,6 +10,7 @@ uniform vec2  uRes;
 uniform float uMotifA, uMotifB, uMorphT;
 uniform int   uMeltMode;
 uniform bool  uMirrorX, uMirrorY;
+uniform vec2  uTilt; // wobble lean (tiltX, tiltY), computed by modulation.ts
 uniform float uWarpPhase, uSpikePhase, uWavePhase, uSpinPhase, uHueOffset, uMaster, uFrame;
 
 out vec4 fragColor;
@@ -54,7 +55,7 @@ void main() {
   vec2 p = s;
 
   // ---------- 2. Tilt, mirror, rotate (+ spin), zoom ----------
-  p /= max(1.0 + P_TILTX * p.x + P_TILTY * p.y, 0.25);
+  p /= max(1.0 + dot(uTilt, p), 0.25);
   if (uMirrorX) p.x = abs(p.x) - P_MIRRORSHIFT;
   if (uMirrorY) p.y = abs(p.y) - P_MIRRORSHIFT;
   p = rot((P_ROTATION + uSpinPhase) * TAU) * p / P_ZOOM;

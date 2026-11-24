@@ -233,7 +233,7 @@ describe('messages', () => {
     expect(renderLook(m1)).toEqual(look0); // the fade starts from what was on screen
     const m2 = apply(m1, { t: 'cmd', name: 'mutate', arg: 'colour' });
     expect(m2.undo).toHaveLength(2);
-    for (const k of ['zoom', 'tiltX'] as const) expect(m2.state.look.params[k]).toEqual(m1.state.look.params[k]);
+    for (const k of ['zoom', 'tiltAmt'] as const) expect(m2.state.look.params[k]).toEqual(m1.state.look.params[k]);
     const m3 = apply(m2, { t: 'cmd', name: 'reset', arg: 'shape' });
     expect(m3.state.look.params.zoom).toEqual(defaultLook().params.zoom);
     const u = apply(m3, { t: 'cmd', name: 'undo' });

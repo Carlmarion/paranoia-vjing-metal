@@ -50,6 +50,10 @@ export interface Modulation {
   wavePhase: number;
   /** Turns, 0…1: turns at the effective `spin` speed (turns/min); glides back upright while spin is fully off. */
   spinPhase: number;
+  /** Turns, 0…1: the wobble, advancing at the effective `tiltSpeed` (turns/min). */
+  tiltPhase: number;
+  /** The lean sent to the shader as (tiltX, tiltY): tiltAmt along tiltAngle + tiltPhase. */
+  tilt: [number, number];
   /** Design §5.2: envelope state per param (used by the shape, line and colour groups). */
   env: EnvState[];
   /** Per envelope group: hits counted since the caller last reset them (the dashboard draws one line per hit). */
@@ -83,6 +87,7 @@ export const HIT_OFF = 0.05;
 export function createModulation(): Modulation {
   return {
     values: new Float32Array(PARAM_COUNT), norm: new Float32Array(PARAM_COUNT), warpPhase: 0, spikePhase: 0, wavePhase: 0, spinPhase: 0,
+    tiltPhase: 0, tilt: [0, 0],
     rest: new Float32Array(PARAM_COUNT), zones: { zoom: NO_ZONE, mirrorShift: NO_ZONE },
     env: Array.from({ length: PARAM_COUNT }, () => ({ c: 1, y: 0 })), envHits: perEnvGroup(() => 0), envArmed: perEnvGroup(() => true),
   };
@@ -125,9 +130,11 @@ export function modulate(
     m.rest[i] = fromNorm(def, normAt(def, ps, i, 0, driftScale, session.reactMaster, driftT));
   }
   countHits(m, groupGate);
+  m.tiltPhase = fract(m.tiltPhase + (m.values[PARAM_INDEX.tiltSpeed] / 60) * dt);
+  m.tilt = tiltOf(m.values, m.tiltPhase);
   if (geom) {
     if (session.zoomStop && !session.fallback) applyStop(m, look, geom);
-    m.zones = zones(m.rest, look, geom);
+    m.zones = zones(m.rest, look, geom, m.tiltPhase);
   } else {
     m.zones = { zoom: NO_ZONE, mirrorShift: NO_ZONE };
   }
@@ -140,6 +147,13 @@ export function modulate(
   m.spinPhase = spin.base === 0 && spin.react === 0
     ? glideUpright(m.spinPhase, dt)
     : fract(m.spinPhase + (m.values[I_SPIN] / 60) * dt);
+}
+
+/** Wobble: the lean vector of tiltAmt along tiltAngle + phase (turns). */
+function tiltOf(v: Float32Array, phase: number): [number, number] {
+  const a = v[PARAM_INDEX.tiltAmt];
+  const t = (v[PARAM_INDEX.tiltAngle] + phase) * 2 * Math.PI;
+  return [a * Math.cos(t), a * Math.sin(t)];
 }
 
 function countHits(m: Modulation, groupGate: Record<EnvGroup, number>): void {
@@ -155,12 +169,13 @@ const ZOOM = PARAMS[I_ZOOM];
 const MIRROR_SHIFT = PARAMS[I_MIRROR_SHIFT];
 
 /** The reach inputs for a set of param values (own scales). */
-function reachIn(v: Float32Array, look: Look, geom: Geom): ReachIn {
+function reachIn(v: Float32Array, look: Look, geom: Geom, tiltPhase: number): ReachIn {
   const o = look.options;
+  const [tiltX, tiltY] = tiltOf(v, tiltPhase);
   const meltBulge = o.meltMode === 1 && geom.morphing ? v[PARAM_INDEX.meltK] / 4 : 0;
   return {
     zoom: v[I_ZOOM], mirrorShift: v[I_MIRROR_SHIFT], mirrorX: o.mirrorX, mirrorY: o.mirrorY,
-    tiltX: v[PARAM_INDEX.tiltX], tiltY: v[PARAM_INDEX.tiltY], thickness: v[PARAM_INDEX.thickness],
+    tiltX, tiltY, thickness: v[PARAM_INDEX.thickness],
     spikeAmp: v[PARAM_INDEX.spikeAmp], warpAmt: v[PARAM_INDEX.warpAmt], glow: v[PARAM_INDEX.glow],
     glowWidth: v[PARAM_INDEX.glowWidth], brightness: v[PARAM_INDEX.brightness], meltBulge,
     radius: geom.radius, ax: geom.ax, ay: geom.ay,
@@ -176,10 +191,10 @@ const limitOf = (i: ReachIn, p: ReachParam, kind: 'ink' | 'glow'): number => {
 function applyStop(m: Modulation, look: Look, geom: Geom): void {
   const zoomHand = look.params.zoom.base;
   if (look.options.mirrorX || look.options.mirrorY) {
-    const lim = limitOf({ ...reachIn(m.values, look, geom), zoom: zoomHand }, 'mirrorShift', 'ink');
+    const lim = limitOf({ ...reachIn(m.values, look, geom, m.tiltPhase), zoom: zoomHand }, 'mirrorShift', 'ink');
     setValue(m, I_MIRROR_SHIFT, stop(look.params.mirrorShift.base, m.values[I_MIRROR_SHIFT], lim));
   }
-  const lim = limitOf(reachIn(m.values, look, geom), 'zoom', 'ink');
+  const lim = limitOf(reachIn(m.values, look, geom, m.tiltPhase), 'zoom', 'ink');
   setValue(m, I_ZOOM, stop(zoomHand, m.values[I_ZOOM], lim));
 }
 
@@ -189,8 +204,8 @@ function setValue(m: Modulation, i: number, v: number): void {
 }
 
 /** Design §4.5: the other params at rest, so the zones do not flicker with the kick. */
-function zones(rest: Float32Array, look: Look, geom: Geom): Zones {
-  const i = reachIn(rest, look, geom);
+function zones(rest: Float32Array, look: Look, geom: Geom, tiltPhase: number): Zones {
+  const i = reachIn(rest, look, geom, tiltPhase);
   const zone = (p: ReachParam, def: typeof ZOOM | typeof MIRROR_SHIFT): Zone => [
     clamp01(toNorm(def, limitOf(i, p, 'glow'))), clamp01(toNorm(def, limitOf(i, p, 'ink'))),
   ];

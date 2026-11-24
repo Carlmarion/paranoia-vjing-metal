@@ -71,10 +71,10 @@ describe('drift', () => {
   test('lock removes drift', () => {
     const look = defaultLook();
     const s = { ...defaultSession(), autopilot: 1 };
-    look.params.tiltX.lock = true;
-    for (const t of [0, 13, 77.7, 400, 9999]) expect(valueOf('tiltX', look, s, frame(), t)).toBeCloseTo(0, 9);
-    look.params.tiltX.lock = false;
-    const moved = [13, 77.7, 400, 9999].some((t) => Math.abs(valueOf('tiltX', look, s, frame(), t)) > 1e-3);
+    look.params.rotation.lock = true;
+    for (const t of [0, 13, 77.7, 400, 9999]) expect(valueOf('rotation', look, s, frame(), t)).toBeCloseTo(0, 9);
+    look.params.rotation.lock = false;
+    const moved = [13, 77.7, 400, 9999].some((t) => Math.abs(valueOf('rotation', look, s, frame(), t)) > 1e-3);
     expect(moved).toBe(true);
   });
 
@@ -82,16 +82,16 @@ describe('drift', () => {
     const look = defaultLook();
     for (const t of [5, 50, 500]) {
       expect(valueOf('sat', look, { ...defaultSession(), autopilot: 1 }, frame(), t)).toBeCloseTo(0.9, 6);
-      expect(valueOf('tiltY', look, { ...defaultSession(), autopilot: 0 }, frame(), t)).toBeCloseTo(0, 9);
-      expect(valueOf('tiltY', look, { ...defaultSession(), autopilot: 1, fallback: true }, frame(), t)).toBeCloseTo(0, 9);
+      expect(valueOf('rotation', look, { ...defaultSession(), autopilot: 0 }, frame(), t)).toBeCloseTo(0, 9);
+      expect(valueOf('rotation', look, { ...defaultSession(), autopilot: 1, fallback: true }, frame(), t)).toBeCloseTo(0, 9);
     }
   });
 
   test('drift amplitude is autopilot × driftAmp in normalised units', () => {
-    const d = paramDef('tiltX');
+    const d = paramDef('rotation');
     const look = defaultLook();
     for (let t = 0; t < 2000; t += 7.3) {
-      const u = modulateNorm(d, look.params.tiltX, PARAM_INDEX.tiltX, 0, 1, 1, t);
+      const u = modulateNorm(d, look.params.rotation, PARAM_INDEX.rotation, 0, 1, 1, t);
       expect(Math.abs(u - 0.5)).toBeLessThanOrEqual(d.driftAmp + 1e-9);
     }
   });
@@ -194,7 +194,7 @@ describe('the stop and the zones (design §4.4, §4.5)', () => {
   /** No drift; nothing but zoom/mirrorShift grows the picture; zoom reacts fully to low. */
   function quietLook(): Look {
     const look = defaultLook();
-    for (const id of ['thickness', 'spikeAmp', 'warpAmt', 'tiltX', 'tiltY'] as const) {
+    for (const id of ['thickness', 'spikeAmp', 'warpAmt', 'tiltAmt'] as const) {
       look.params[id].base = 0;
       look.params[id].react = 0;
     }
@@ -334,4 +334,44 @@ describe('envelope stage (design §5.2)', () => {
     expect((m.envHits as Record<string, unknown>).inner).toBeUndefined();
   });
 
+});
+
+describe('wobble tilt', () => {
+  const tiltLook = (amt: number, angle: number, speed = 0): Look => {
+    const look = defaultLook();
+    look.params.tiltAmt = { base: amt, react: 0, band: 'none', thr: 0, lock: false };
+    look.params.tiltAngle = { base: angle, react: 0, band: 'none', thr: 0, lock: false };
+    look.params.tiltSpeed = { base: speed, react: 0, band: 'none', thr: 0, lock: false };
+    return look;
+  };
+
+  test('amount and angle give the lean vector', () => {
+    const m = createModulation();
+    modulate(m, tiltLook(0.2, 0), noDrift(), frame(), 0, 1 / 60);
+    expect(m.tilt[0]).toBeCloseTo(0.2, 6);
+    expect(m.tilt[1]).toBeCloseTo(0, 6);
+    modulate(m, tiltLook(0.2, 0.25), noDrift(), frame(), 0, 1 / 60);
+    expect(m.tilt[0]).toBeCloseTo(0, 6);
+    expect(m.tilt[1]).toBeCloseTo(0.2, 6);
+  });
+
+  test('speed turns the direction: 6 turns/min is one turn in 10 s, a quarter in 2.5 s', () => {
+    const m = createModulation();
+    for (let i = 0; i < 150; i++) modulate(m, tiltLook(0.2, 0, 6), noDrift(), frame(), 0, 1 / 60);
+    expect(m.tilt[0]).toBeCloseTo(0, 3);
+    expect(m.tilt[1]).toBeCloseTo(0.2, 3);
+    for (let i = 0; i < 450; i++) modulate(m, tiltLook(0.2, 0, 6), noDrift(), frame(), 0, 1 / 60);
+    expect(m.tilt[0]).toBeCloseTo(0.2, 3);
+  });
+
+  test('the sound drives the amount: no lean at rest, a lean on the kick', () => {
+    const look = tiltLook(0, 0.125);
+    look.params.tiltAmt = { base: 0, react: 0.5, band: 'low', thr: 0, lock: false };
+    const m = createModulation();
+    modulate(m, look, noDrift(), frame({ low: 0 }), 0, 1 / 60);
+    expect(Math.hypot(m.tilt[0], m.tilt[1])).toBe(0);
+    modulate(m, look, noDrift(), frame({ low: 1 }), 0, 1 / 60);
+    expect(Math.hypot(m.tilt[0], m.tilt[1])).toBeCloseTo(0.2, 6);
+    expect(m.tilt[0]).toBeCloseTo(m.tilt[1], 6);
+  });
 });

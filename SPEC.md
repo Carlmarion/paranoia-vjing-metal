@@ -265,8 +265,9 @@ Units: motif space, the cell is −1…+1. A typical stroke half-width is 0.02�
 | zoom | shape | log | 0.5 | 3 | 0.85 | low | 0.034 | 0.15 | 0.023 | 120 | 0.7–1.0 |
 | rotation | shape | lin | −0.25 | 0.25 | 0 | none | 0 | 0 | 0.15 | 240 | −0.1–0.1 |
 | spin | shape | lin | −6 | 6 | 0 | none | 0 | 0 | 0 | — | −2–2 |
-| tiltX | shape | lin | −0.4 | 0.4 | 0 | none | 0 | 0 | 0.2 | 90 | −0.2–0.2 |
-| tiltY | shape | lin | −0.4 | 0.4 | 0 | none | 0 | 0 | 0.2 | 110 | −0.2–0.2 |
+| tiltAmt | shape | lin | 0 | 0.4 | 0 | none | 0 | 0 | 0.2 | 90 | 0–0.2 |
+| tiltAngle | shape | wrap | 0 | 1 | 0 | none | 0 | 0 | 0.1 | 200 | 0–1 |
+| tiltSpeed | shape | lin | −6 | 6 | 0 | none | 0 | 0 | 0 | — | −1–1 |
 | mirrorShift | shape | lin | 0 | 0.6 | 0 | none | 0 | 0 | 0.1 | 150 | 0–0.4 |
 | warpAmt | shape | lin | 0 | 0.15 | 0.01 | mid | 0.3 | 0.2 | 0.1 | 60 | 0–0.06 |
 | warpScale | shape | log | 0.5 | 8 | 2 | none | 0 | 0 | 0.15 | 200 | 1–5 |
@@ -296,12 +297,14 @@ Units: motif space, the cell is −1…+1. A typical stroke half-width is 0.02�
 
 **Zoom (v2).** Zoom is `log` 0.5…3, so it can fill the window. A row may carry `reactScale` (zoom: 0.5): randomize and mutate scale their react amounts by it (B8). `react` and `driftAmp` are normalised, so a v1 Look (lin 0.5…1.4) is converted on load: when it stores a numeric zoom react, `push = react × 0.9`, `react = sign(push) × |ln(max(base + push, 0.05) / base)| / ln 6`, clamped to −1…1, which keeps the same push at that base. A v1 zoom without a stored react takes the default.
 
-31 params → `uniform float uP[31];`. `params.ts` exports the GLSL header (`#define P_ZOOM uP[0]`, `#define P_ROTATION uP[1]` …, one line per row, names upper-cased) that `gl.ts` inserts after the `#version` line of the fragment source. GLSL ES has no `##` token pasting, so each name is its own macro.
+32 params → `uniform float uP[32];`. `params.ts` exports the GLSL header (`#define P_ZOOM uP[0]`, `#define P_ROTATION uP[1]` …, one line per row, names upper-cased) that `gl.ts` inserts after the `#version` line of the fragment source. GLSL ES has no `##` token pasting, so each name is its own macro.
 
 `waveFreq` is in cycles per motif unit. At 1080p the Nyquist limit is about 230, so values above that alias on purpose: this is the moiré effect.
 
 ### B4.3 Phases
 A speed param that changes over time must not be multiplied by time (it jumps). `modulation.ts` integrates four phases each frame and uploads them: `uWarpPhase += warpSpeed × dt`, `uSpikePhase += spikeSpeed × dt`, `uWavePhase += waveSpeed × dt`. `uWavePhase` wraps at 1000 (it feeds a sine, so the wrap is invisible). The warp and spike phases are noise coordinates and are never wrapped: a wrap would make the shape jump. The shader's `hash` is an integer hash of the cell index, exact up to 2^24 cells, so noise stays clean for days of running. `uSpinPhase` is in turns, kept in 0…1. It advances by `spin / 60 × dt`, where `spin` is the effective value in turns per minute: band and react make the motif turn with the music, and with `base` 0 it stays where the sound left it. While spin is fully off (`base` 0 and `react` 0) it glides back to the nearest whole turn with a time constant of 0.4 s and snaps to exactly 0 within 1e-4, so the motif returns upright without a jump.
+
+**Wobble tilt.** The lean is `tiltAmt` (how far, the one to drive with sound) along the direction `tiltAngle` (turns: 0 = right, 0.25 = up) plus a phase `uTiltPhase` that advances at `tiltSpeed` turns per minute (like spin, B4.3; it never glides back). `modulation.ts` sends the shader `uTilt = tiltAmt × (cos 2π(angle + phase), sin 2π(angle + phase))`. With speed 0 it is a fixed lean in any direction; with a slow speed each kick leans toward a different side. Old Looks with `tiltX` / `tiltY` are converted on load to the same lean: amount = length, angle = direction; a reaction carries over to the amount (×2, the new span is half the old), band and threshold from the axis with the larger reaction, and with no base lean the reaction's direction gives the angle.
 
 ### B4.4 Reach, zones and the stop (`reach.ts`)
 
@@ -347,6 +350,7 @@ uniform float uP[31];
 uniform vec2  uRes;
 uniform float uMotifA, uMotifB, uMorphT;      // layer indices, eased morph 0…1
 uniform int   uMeltMode; uniform bool uMirrorX, uMirrorY;
+uniform vec2  uTilt;
 uniform float uWarpPhase, uSpikePhase, uWavePhase, uSpinPhase, uHueOffset, uMaster, uFrame;
 ```
 
@@ -358,7 +362,7 @@ vec2 s = (gl_FragCoord.xy - 0.5 * uRes) / (0.5 * min(uRes.x, uRes.y));
 vec2 p = s;
 
 // 2. Tilt (perspective skew), mirror, rotate (+ spin), zoom
-p /= max(1.0 + P_TILTX * p.x + P_TILTY * p.y, 0.25);
+p /= max(1.0 + dot(uTilt, p), 0.25);         // uTilt: the wobble lean (B4.3)
 if (uMirrorX) p.x = abs(p.x) - P_MIRRORSHIFT;
 if (uMirrorY) p.y = abs(p.y) - P_MIRRORSHIFT;
 p = rot((P_ROTATION + uSpinPhase) * TAU) * p / P_ZOOM;

@@ -182,6 +182,7 @@ function baseDetents(def: ParamDef): number[] {
     for (let t = Math.ceil(def.min / ROTATION_MARK_TURNS); t * ROTATION_MARK_TURNS <= def.max; t++) marks.push(toNorm(def, t * ROTATION_MARK_TURNS));
     return marks;
   }
+  if (def.id === 'tiltAngle') return [0, 1, 2, 3, 4, 5, 6, 7, 8].map((k) => k / 8); // every 45°
   return def.min < 0 && def.max > 0 ? [toNorm(def, 0)] : [];
 }
 

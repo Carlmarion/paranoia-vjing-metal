@@ -18,6 +18,8 @@ export interface FrameUniforms {
   spikePhase: number;
   wavePhase: number;
   spinPhase: number;
+  /** Wobble lean (tiltX, tiltY). */
+  tilt: [number, number];
   hueOffset: number;
   master: number;
   frame: number;
@@ -25,7 +27,7 @@ export interface FrameUniforms {
 
 const UNIFORMS = [
   'uSdf', 'uP', 'uRes', 'uMotifA', 'uMotifB', 'uMorphT', 'uMeltMode', 'uMirrorX', 'uMirrorY',
-  'uWarpPhase', 'uSpikePhase', 'uWavePhase', 'uSpinPhase', 'uHueOffset', 'uMaster', 'uFrame',
+  'uWarpPhase', 'uSpikePhase', 'uWavePhase', 'uSpinPhase', 'uTilt', 'uHueOffset', 'uMaster', 'uFrame',
 ] as const;
 type UniformName = (typeof UNIFORMS)[number];
 
@@ -154,6 +156,7 @@ export class Renderer {
     gl.uniform1f(L.uSpikePhase, u.spikePhase);
     gl.uniform1f(L.uWavePhase, u.wavePhase);
     gl.uniform1f(L.uSpinPhase, u.spinPhase);
+    gl.uniform2f(L.uTilt, u.tilt[0], u.tilt[1]);
     gl.uniform1f(L.uHueOffset, u.hueOffset);
     gl.uniform1f(L.uMaster, u.master);
     gl.uniform1f(L.uFrame, u.frame % 997);

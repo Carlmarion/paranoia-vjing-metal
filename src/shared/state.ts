@@ -1,6 +1,6 @@
 // State model (B3): types, defaults, serialise, migrate, safe storage.
 import { PARAMS, PARAM_IDS, paramDef, type Band, type ParamDef, type ParamId } from './params';
-import { clamp } from './math';
+import { clamp, fract } from './math';
 
 export type { Band } from './params';
 
@@ -245,12 +245,44 @@ function migrateEnvs(v: unknown): Record<EnvGroup, Env> {
   return perEnvGroup((g) => migrateEnv(src[g]));
 }
 
+/** Old tilt: lin −0.4…0.4 per axis (normalised span 0.8). New tiltAmt: lin 0…0.4 (span 0.4). */
+const OLD_TILT_MAX = 0.4;
+const OLD_TILT_SPAN = 0.8;
+const TILT_AMT_SPAN = 0.4;
+
+/**
+ * A stored tiltX / tiltY pair → tiltAmt + tiltAngle with the same lean: amount = length, angle = direction (turns).
+ * A reaction carries over to the amount (the larger axis gives band and threshold); with no base lean, the
+ * reaction's direction gives the angle.
+ */
+function migrateTilt(p: Record<string, unknown>, params: Record<ParamId, ParamState>): void {
+  if (isObj(p.tiltAmt) || (!isObj(p.tiltX) && !isObj(p.tiltY))) return;
+  const axis = (v: unknown): { base: number; react: number; band: Band; thr: number; lock: boolean } => {
+    const o = isObj(v) ? v : {};
+    return {
+      base: num(o.base, -OLD_TILT_MAX, OLD_TILT_MAX, 0), react: num(o.react, REACT_RANGE[0], REACT_RANGE[1], 0),
+      band: oneOf(o.band, BANDS, 'none'), thr: num(o.thr, THR_RANGE[0], THR_RANGE[1], 0), lock: bool(o.lock, false),
+    };
+  };
+  const x = axis(p.tiltX), y = axis(p.tiltY);
+  const lead = Math.abs(x.react) >= Math.abs(y.react) ? x : y;
+  const amt = Math.hypot(x.base, y.base);
+  const dir = amt > 0 ? Math.atan2(y.base, x.base) : Math.atan2(y.react, x.react);
+  params.tiltAmt = {
+    base: clamp(amt, 0, OLD_TILT_MAX),
+    react: clamp((Math.hypot(x.react, y.react) * OLD_TILT_SPAN) / TILT_AMT_SPAN, REACT_RANGE[0], REACT_RANGE[1]),
+    band: lead.band, thr: lead.thr, lock: x.lock || y.lock,
+  };
+  params.tiltAngle = { ...params.tiltAngle, base: fract(dir / (2 * Math.PI)), lock: x.lock || y.lock };
+}
+
 /** Any partial Look → full Look. Missing params/options take table defaults; v1 Looks are converted. */
 export function migrateLook(v: unknown): Look {
   const src = isObj(v) ? v : {};
   const params = {} as Record<ParamId, ParamState>;
   const p = isObj(src.params) ? src.params : {};
   for (const def of PARAMS) params[def.id] = migrateParamState(p[def.id], def);
+  migrateTilt(p, params);
   const version = typeof src.v === 'number' ? src.v : 1;
   if (version < 2 && isObj(p.zoom) && typeof p.zoom.react === 'number') params.zoom.react = migrateZoomReact(params.zoom.react, params.zoom.base);
   return { v: LOOK_VERSION, params, options: migrateOptions(src.options), env: migrateEnvs(src.env) };

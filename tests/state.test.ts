@@ -58,3 +58,27 @@ describe('session defaults', () => {
     expect(defaultSession().autopilot).toBe(0);
   });
 });
+
+describe('tilt migration (wobble)', () => {
+  test('a stored tiltX/tiltY lean becomes the same amount and direction', () => {
+    const look = migrateLook({ v: 2, params: { tiltX: { base: 0.1, react: 0, band: 'none', thr: 0, lock: false }, tiltY: { base: 0.1, react: 0, band: 'none', thr: 0, lock: true } } });
+    expect(look.params.tiltAmt.base).toBeCloseTo(Math.hypot(0.1, 0.1), 9);
+    expect(look.params.tiltAngle.base).toBeCloseTo(0.125, 9);
+    expect(look.params.tiltSpeed.base).toBe(0);
+    expect(look.params.tiltAmt.lock).toBe(true);
+  });
+
+  test('a stored reaction on tiltX carries over to the amount, pointing its way', () => {
+    const look = migrateLook({ v: 2, params: { tiltX: { base: 0, react: -0.3, band: 'low', thr: 0.2, lock: false } } });
+    expect(look.params.tiltAmt.react).toBeCloseTo(0.6, 9);
+    expect(look.params.tiltAmt.band).toBe('low');
+    expect(look.params.tiltAmt.thr).toBe(0.2);
+    expect(look.params.tiltAngle.base).toBeCloseTo(0.5, 9);
+  });
+
+  test('no stored tilt → defaults', () => {
+    const look = migrateLook({ params: {} });
+    expect(look.params.tiltAmt).toEqual(defaultLook().params.tiltAmt);
+    expect(look.params.tiltAngle).toEqual(defaultLook().params.tiltAngle);
+  });
+});
