@@ -14,6 +14,8 @@ import { h, button, lin, row, fmt, fileStamp, download, Slider, Seg, Meter, type
 import { ShapesColumn } from './shapes';
 import { DrawModal, type DrawDoc } from './draw';
 import { EnvEditor } from './envelope';
+import { HueStrip } from './huestrip';
+import { liveSpan } from '../shared/colour';
 
 const OFFLINE_AFTER_MS = 1000;
 const HELLO_EVERY_MS = 1000;
@@ -224,11 +226,19 @@ function paramRow(def: ParamDef, parent: HTMLElement): ParamRow {
 }
 
 const envEditors = {} as Record<EnvGroup, EnvEditor>;
+/** Design §7: glow and core handles set hue and hueDepth (same throttle keys as their base sliders). */
+const hueStrip = new HueStrip({
+  onInput: (hue, hueDepth) => {
+    queueSend('p:hue:base', { t: 'setParam', id: 'hue', field: 'base', value: hue });
+    queueSend('p:hueDepth:base', { t: 'setParam', id: 'hueDepth', field: 'base', value: hueDepth });
+  },
+});
 for (const g of GROUPS) {
   const panel = h('div', 'panel', undefined, centre);
   const head = h('div', 'phead', undefined, panel);
   h('h2', '', g, head);
   if (isEnvGroup(g)) envEditors[g] = envEditor(g, head, panel);
+  if (g === 'colour') panel.append(hueStrip.el);
   h('span', 'spacer', undefined, head);
   button('Randomize', () => cmd('randomize', g), head);
   button('Mutate', () => cmd('mutate', g), head);
@@ -398,6 +408,7 @@ function applyState(msg: StateMsg): void {
   }
 
   for (const g of ENV_GROUPS) envEditors[g].set(look.env[g]);
+  hueStrip.set(look.params.hue.base, look.params.hueDepth.base);
 
   const o: LookOptions = look.options;
   holdSeg.set(o.holdBeats);
@@ -471,6 +482,8 @@ function applyMeters(m: MetersMsg): void {
   }
 
   for (const g of ENV_GROUPS) envEditors[g].addHits(m.envHits[g]);
+  const eff = (id: 'hue' | 'hueDepth' | 'thickness' | 'sat'): number => fromNorm(PARAMS[PARAM_INDEX[id]], m.values[PARAM_INDEX[id]] ?? 0);
+  hueStrip.setLive(liveSpan(eff('hue'), eff('hueDepth'), eff('thickness'), m.hueOffset), eff('sat'));
   paramRows[PARAM_INDEX.zoom]?.base.setZones(...m.zones.zoom);
   paramRows[PARAM_INDEX.mirrorShift]?.base.setZones(...m.zones.mirrorShift);
 

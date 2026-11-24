@@ -137,6 +137,9 @@ body.nostate .cols { opacity: .35; pointer-events: none; }
 .env-arrow.on { transform: rotate(180deg); }
 .env-editor { padding: 8px 0 4px; border-bottom: 1px solid var(--line); }
 .env-canvas { display: block; touch-action: none; }
+/* colour strip (design §7.2) */
+.huestrip { padding: 8px 0 6px; border-bottom: 1px solid var(--line); }
+.huestrip-canvas { display: block; touch-action: none; }
 .env-foot { display: flex; gap: 8px; padding-top: 2px; }
 .env-values, .env-rate { color: var(--dim); font-size: 10px; }
 .prow {

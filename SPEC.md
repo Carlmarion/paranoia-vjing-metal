@@ -414,6 +414,7 @@ fragColor = vec4(clamp(col, 0.0, 1.0) * uMaster, 1.0);
 ```
 
 Notes:
+- **Colour in plain words** (step 10): `hue` is the colour of the line's edge; `hueDepth` turns the colour across the line, from the glow (`hue − 0.2 × hueDepth`) to the core (deeper inside the line is further round the wheel, so a thicker line, e.g. on a thickness kick, pushes the core colour further); `hueSpace` turns the colour with the distance from the screen centre (half a turn at the edge of the square at 1). Hue jumps (`uHueOffset`) turn everything together. The dashboard's colour strip (B10) shows these as two handles and a live bracket.
 - Noise is hash-based, no textures: an integer (`uint`) hash of `floor(p)`. `vnoise` and `fbm` return 0…1.
 - Draw one fullscreen triangle. Canvas size = CSS size × `min(devicePixelRatio, 1)` × `?scale=` (default 1).
 - On shader compile or link failure: keep the previous program, show the error in the debug overlay, and send it to the Control window. Never show a blank screen.
@@ -547,6 +548,7 @@ For when the music turns ambient: one press calms everything driven by the kick,
   motifA, motifB, morphT, holdRemaining, fps,                      // 20×/s; doubles as heartbeat
   zones: { zoom: [orange, red], mirrorShift: [orange, red] },      // B4.4, normalised slider positions
   envHits: { shape | line | colour: number },                      // B4.5 hits since the previous meters message
+  hueOffset: number,                                               // the hue-jump offset sent to the shader (0 in fallback)
   error?: string }
 { t: 'library', version: number, shapes: ShapeMeta[], free: number, persistent: boolean }
                          // on hello and whenever the library changes; free = empty slots; persistent = false without IndexedDB
@@ -575,6 +577,8 @@ Dark, low-luminance UI (the laptop must not light the room): background `#0b0b0d
 - Melt hold toggle with a wide scrub slider (`holdPos`).
 
 **Centre: one panel per group** (shape, melt, line, inner, colour). Header has Randomize, Mutate and Reset for that group. One row per param:
+
+The colour panel opens with the **colour strip**: the colour wheel laid flat at the live `sat`, with two handles for the at-rest colours at the screen centre, **glow** `G = hue − 0.2 × hueDepth` and **core** `C = hue + 0.3 × hueDepth` (a reference depth of 0.03, a typical line half-width). The handles map one-to-one to the params: `hueDepth = 2 × arc(G → C)` (signed shortest way, taken the way closest to the current depth so opposite handles never flip), `hue = G + 0.2 × hueDepth`. Dragging one handle keeps the other in place; dragging the band between them moves both (changes `hue` only); shift = fine. A bright **bracket** marks the colours on screen now, from live glow `hue_eff + hueOffset − 0.2 × hueDepth_eff` to live core `… + 10 × clamp(0.03 + thickness_eff, 0, 0.1) × hueDepth_eff`, capped at one turn: it stretches on thickness kicks, slides with drift and jumps with hue jumps. `hueSpace` is not drawn (it varies across the screen). The `hue` and `hueDepth` rows stay under the strip for react, band, thr, lock and fine control.
 
 The shape, line and colour headers also hold a **mini curve** (64×18 px) of the group's envelope (B4.5) and a ▾ arrow; the arrow (or a click on the mini curve) opens the **envelope editor** under the header, closed by default:
 - The curve is drawn by `envCurve`, the code the Display runs: the response to "full on through attack and sustain, then off". Soft fill under it. Three sections (attack, sustain, release) separated by thin yellow markers; each section's time axis spans its parameter's whole range (2 s, 10 s, 20 s) on a square-root scale, so short times keep room.
@@ -710,6 +714,7 @@ Same result as `tools/bake_sdf.py` (B2.2), computed in a Web Worker so the proje
 - **store:** every message type; unknown messages are ignored; a corrupt `localStorage` value falls back to defaults.
 - **state:** a v1 Look keeps the same zoom push at its base; a v2 Look is not converted again; a v1 zoom without a react keeps the default.
 - **envelope:** neutral settings return the input exactly for any `dt`; attack is the rise time constant; a sustained sound starts at 1 and sags to `sustain`; release is the tail time constant; a second hit inside the tail peaks lower, and after 60 s of quiet the same; 30 and 120 fps give the same peak (1) and curves within 2%; `dt` 0 or 5 keeps `c` and `y` in 0…1. With neutral envelopes 600 random frames equal B4.1 exactly; inner never uses the envelope; `setEnv` clamps and ignores bad input; `lerpLook` interpolates envelopes; randomize and mutate leave them alone; reset restores neutral per group.
+- **colour:** `hsv2rgb` matches the shader for the primaries and white; handles ↔ params round-trips within 1e-9 for `|hueDepth| < 1`; every handle pair gives params in range; moving one handle leaves the other colour unchanged; opposite handles follow the previous sign, equal handles give depth 0; the live span is glow → core, grows with thickness, shifts with `hueOffset`, and is capped at one turn.
 - **ambient:** on zeroes exactly the low, beat and high reactions and sets the envelopes, over 5 s; off gives the original back, keeps hand edits and skips a param whose band changed; recall and reset while on come out calm; a group reset while on keeps the other groups' stash; undo while on keeps a reaction re-added by hand and calms a pre-ambient entry; randomize while on leaves those reactions at 0; the stash survives a reload and a corrupt one is ignored; a v1 preset imported and recalled while on is migrated, calmed, and restored by Off.
 - **reach:** fill grows with zoom and mirrorShift; mirrorShift counts only on a mirrored axis and does not scale with zoom; tilt raises fill; the bisected limit gives fill 1 within 1e-3; a wider or taller window never lowers the limit; radius 0, glow 0 and a zero-size window give finite results. **Stop:** sound never raises zoom past the limit; the hand past it is kept; negative react still pulls in; zones do not move with the kick; stop off = B4.1. `inkRadius` of a known disc within 0.015.
 - **strokes:** smoothing keeps a straight raw line straight and never lags the raw point by more than one sample spacing; a point under R6 gives 6 points at the same radius, 60° apart, one group; X mirror negates x only; coverage of a known disc is within 2% of its area; slicing a path at `q × L` returns a prefix whose length is `q × L` within 1e-6, monotonic in `q`, and the whole list at `q = 1`; mid-group every copy is cut at the same length.
@@ -795,6 +800,13 @@ M0 passed on 14 Nov on the venue chain (mixer → Focusrite → Display → proj
 - Live: LIVE on, draw while the synth plays: lines appear on the projector within a blink, the kick moves them; LIVE off melts back; Finish keeps the drawing and stops the flow. Close the dashboard tab while live: within 3 s the Display finishes on its own.
 - Replay: "draw in" on a saved shape with blackout on: the drawing appears on black, line by line, in your stroke order.
 - Pass: no console errors in either window; 60 fps on the projector while drawing live.
+
+**M8 — Live polish (1 h).** One techno track and one ambient track, `?src=in`.
+- Zoom: on the three largest shapes, play zoom 1–3: the zones sit where the glow and then the line leave the window; with Zoom stop on, the kick's tick never crosses red; resize the window and watch the zones move.
+- Envelope: on each of shape, line and colour, open the curve and try a long release, then a low sustain; the trigger lines show how often each group fires.
+- Ambient: on the ambient track press `A`: the kick reactions fade out over 5 s; re-add one by hand; `A` again gives the rest back. Reload the Display while on: `AMBIENT` is still lit.
+- Colour: the strip's handles sit on the colours the projector shows at rest; the bracket stretches on kicks and jumps with hue jumps.
+- Note which constants to retune: `GLOW_CUTOFF` (0.08), `AMBIENT_ENV`, the zoom max (3).
 
 ## D3. Symptom → knob
 
