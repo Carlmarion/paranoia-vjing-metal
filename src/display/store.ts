@@ -107,7 +107,11 @@ export function patchSession(model: Model, patch: Partial<Session> | null): Mode
 export function recallPreset(model: Model, slot: number, dur: number): Model {
   const p = Number.isInteger(slot) ? model.state.presets[slot] : undefined;
   if (!p) return model;
-  return { ...replaceLook(model, cloneLook(p.look), dur), currentPreset: slot };
+  // the wall belongs to the moment, not to the preset: a recall keeps the one on screen
+  const { wallCols, wallRows, wallWave, wallDelay } = model.state.look.options;
+  const look = cloneLook(p.look);
+  look.options = { ...look.options, wallCols, wallRows, wallWave, wallDelay };
+  return { ...replaceLook(model, look, dur), currentPreset: slot };
 }
 
 /**

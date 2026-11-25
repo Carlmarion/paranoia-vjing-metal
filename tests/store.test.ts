@@ -565,6 +565,17 @@ describe('wall options', () => {
     expect(m.state.look.options).toEqual(m0.state.look.options);
   });
 
+  test('recalling a preset keeps the wall that is on screen, whatever the preset stored', () => {
+    const stored = defaultLook();
+    stored.options.wallCols = 5; stored.options.wallWave = 4; stored.options.meltMode = 2;
+    const base = fresh();
+    const withPreset = { ...base, state: { ...base.state, presets: savePreset(new Array(16).fill(null), stored, NOW).presets } };
+    const wall = apply(withPreset, { t: 'setOption', key: 'wallCols', value: 3 }, { t: 'setOption', key: 'wallRows', value: 2 }, { t: 'setOption', key: 'wallDelay', value: 0.4 });
+    for (const m of [apply(wall, { t: 'cmd', name: 'loadPreset', arg: 0 }), recallPreset(wall, 0, 8)]) {
+      expect(m.state.look.options).toMatchObject({ wallCols: 3, wallRows: 2, wallWave: 0, wallDelay: 0.4, meltMode: 2 });
+    }
+  });
+
   test('Reset all removes the wall; Zero and Randomize all leave it', () => {
     const wall = apply(fresh(), { t: 'setOption', key: 'wallCols', value: 3 }, { t: 'setOption', key: 'wallWave', value: 2 });
     expect(apply(wall, { t: 'cmd', name: 'reset' }).state.look.options.wallCols).toBe(1);

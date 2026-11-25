@@ -140,7 +140,13 @@ const orderSeg = new Seg<Order>(ORDERS, ['random', 'seq'], (v) => setSession('or
 
 const holdSeg = new Seg<HoldBeats>(HOLD_BEATS, HOLD_BEATS.map((v) => (v === 0 ? 'flow' : String(v))), (v) => send({ t: 'setOption', key: 'holdBeats', value: v }), row('hold beats', left));
 const morphSeg = new Seg<MorphBeats>(MORPH_BEATS, MORPH_BEATS.map(String), (v) => send({ t: 'setOption', key: 'morphBeats', value: v }), row('morph beats', left));
-const meltSeg = new Seg<MeltMode>(MELT_MODES, ['blend', 'fuse', 'spatial'], (v) => send({ t: 'setOption', key: 'meltMode', value: v }), row('melt', left));
+/** Hover reminders for the three melts, in the order of MELT_MODES. */
+const MELT_TIPS = [
+  'BLEND: the lines slide from the old shape to the new one. Clean and calm; the in-between is a thin mix of both.',
+  'FUSE: halfway, both shapes are on screen and stick together like liquid, then the old one lets go. The richest in-between. meltK = how sticky.',
+  'SPATIAL: the new shape eats the old one patch by patch, like a stain spreading. meltNoise = how patchy, meltNoiseScale = patch size.',
+];
+const meltSeg = new Seg<MeltMode>(MELT_MODES, ['blend', 'fuse', 'spatial'], (v) => send({ t: 'setOption', key: 'meltMode', value: v }), row('melt', left), MELT_TIPS);
 
 type BoolOption = 'mirrorX' | 'mirrorY';
 const toggleOption = (key: BoolOption): void => {
@@ -158,11 +164,6 @@ const wallWaveSeg = new Seg<WallWave>(WALL_WAVES, ['rows', 'snake', 'centre', 'd
   (v) => send({ t: 'setOption', key: 'wallWave', value: v }), row('wave', left));
 const wallDelay = numSlider(left, 'wave delay', lin(...WALL_DELAY_RANGE), 'o:wallDelay',
   (v) => ({ t: 'setOption', key: 'wallDelay', value: v }), defaultOptions().wallDelay, { unit: 's' });
-/** Speed (turns/min) the spin shortcut sets; pressing it again sets 0. */
-const SPIN_SHORTCUT_RPM = 1;
-const spinBtn = toggleBtn('spin', () => {
-  if (last) send({ t: 'setParam', id: 'spin', field: 'base', value: last.state.look.params.spin.base === 0 ? SPIN_SHORTCUT_RPM : 0 });
-}, row('rotate', left));
 
 const hueEverySeg = new Seg<HueJumpEvery>(HUE_JUMP_EVERY, HUE_JUMP_EVERY.map((v) => (v === 0 ? 'off' : String(v))),
   (v) => send({ t: 'setOption', key: 'hueJumpEvery', value: v }), row('hue jump', left));
@@ -171,8 +172,10 @@ const hueAmt = numSlider(left, 'jump amt', lin(...HUE_JUMP_AMT_RANGE), 'o:hueJum
 
 const meltHoldRow = row('melt hold', left);
 const meltHoldBtn = toggleBtn('hold', () => toggleSession('meltHold'), meltHoldRow);
-const holdPos = numSlider(left, '', lin(...SESSION_RANGES.holdPos), 's:holdPos',
+const holdPos = numSlider(left, 'scrub', lin(...SESSION_RANGES.holdPos), 's:holdPos',
   (v) => ({ t: 'setSession', key: 'holdPos', value: v }), defaultSession().holdPos, { cls: 'scrub', readout: false });
+holdPos.slider.el.title = 'with hold on: drag to move the melt by hand, from the current shape (left) to the next one (right)';
+meltHoldBtn.title = 'stop the automatic melting and take the melt in hand with the scrub slider below';
 
 // ---------- centre: param groups ----------
 
@@ -445,7 +448,6 @@ function applyState(msg: StateMsg): void {
   wallDelay.set(o.wallDelay);
   setOn(mirrorXBtn, o.mirrorX);
   setOn(mirrorYBtn, o.mirrorY);
-  setOn(spinBtn, look.params.spin.base !== 0);
 
   setOn(freezeBtn, session.frozen);
   setOn(fallbackBtn, session.fallback);

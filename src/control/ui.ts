@@ -176,9 +176,17 @@ export class Seg<T extends string | number> {
   readonly el: HTMLDivElement;
   private readonly btns: HTMLButtonElement[] = [];
 
-  constructor(private readonly values: readonly T[], labels: readonly string[], onPick: (v: T) => void, parent?: HTMLElement) {
+  /** `titles`: one hover tooltip per button. */
+  constructor(
+    private readonly values: readonly T[], labels: readonly string[], onPick: (v: T) => void, parent?: HTMLElement,
+    titles?: readonly string[],
+  ) {
     this.el = h('div', 'seg', undefined, parent);
-    values.forEach((v, i) => this.btns.push(button(labels[i], () => onPick(v), this.el)));
+    values.forEach((v, i) => {
+      const b = button(labels[i], () => onPick(v), this.el);
+      if (titles?.[i]) b.title = titles[i];
+      this.btns.push(b);
+    });
   }
 
   set(v: T): void {

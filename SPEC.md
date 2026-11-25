@@ -463,7 +463,7 @@ Notes:
 - **Delay** of a cell = `step × wallDelay`; when the largest would pass `WALL_HISTORY_S = 6` s, all delays are scaled down so the last cell is 6 s late.
 - **History:** while the wall is larger than 1×1 the Display keeps the last 6 s of frame inputs (param values, phases, tilt, hue offset, both layers, `uMorphT`, melt mode, mirrors). A cell is drawn with the newest snapshot at least its delay old (the oldest one when history is shorter). So reactions and the melt cross the wall as a wave.
 - **Not delayed:** the trail values, grain and master, the meters and everything the dashboard shows, the sequencer, and the contents of the layers: live drawing appears in all cells at once.
-- Options jump on recall like the mirrors. Randomize and Zero leave the wall alone; Reset all removes it.
+- **The wall belongs to the moment, not to the preset:** a recall (by hand or by the cycle) keeps the four wall options that are on screen, whatever the preset stored. Randomize and Zero leave the wall alone; Reset all removes it.
 
 ## B6. Audio (`src/display/audio/`)
 
@@ -622,8 +622,8 @@ Dark, low-luminance UI (the laptop must not light the room): background `#0b0b0d
 - `autoAdvance` toggle, `order`, `holdBeats`, `morphBeats`.
 - Melt mode (3 buttons), mirror X, mirror Y, hue jump every, hue jump amount.
 - The wall (B5.2): `wall cols` and `wall rows` (1…8), `wave` (rows · snake · centre · diag · rnd), `wave delay` slider (0…1 s).
-- Spin button: sets the `spin` base to 1 turn/min when it is 0, else to 0; lit while the base is not 0.
-- Melt hold toggle with a wide scrub slider (`holdPos`).
+- Melt hold toggle with a wide slider labelled `scrub` (`holdPos`); both have a hover tooltip.
+- The three melt buttons have hover tooltips saying what each melt looks like and which sliders shape it.
 
 **Centre: one panel per group** (shape, melt, line, inner, colour, trails). Header has Randomize, Mutate and Reset for that group. One row per param:
 
