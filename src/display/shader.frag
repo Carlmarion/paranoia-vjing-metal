@@ -114,7 +114,7 @@ void main() {
     float half_ = 0.5 * min(uScreen.x, uScreen.y);
     vec2 was = uTrailM * ((gl_FragCoord.xy - 0.5 * uScreen) / half_);
     vec2 uv = (was * half_ + 0.5 * uScreen) / uScreen;
-    if (uv == clamp(uv, 0.0, 1.0)) echo = max(texture(uPrev, uv) * uTrailDecay - uFloor, 0.0);
+    if (uv == clamp(uv, 0.0, 1.0)) echo = max(min(texture(uPrev, uv), 1.0) * uTrailDecay - uFloor, 0.0); // capped: a flash starts fading at once
   }
   fragColor = max(vec4(col, lum), echo);
 }

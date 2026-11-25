@@ -429,7 +429,7 @@ vec4 echo = vec4(0.0);
 if (uTrailDecay > 0.0) {
   float hs = 0.5 * min(uScreen.x, uScreen.y);
   vec2 uv = (uTrailM * ((gl_FragCoord.xy - 0.5 * uScreen) / hs) * hs + 0.5 * uScreen) / uScreen;
-  if (uv == clamp(uv, 0.0, 1.0)) echo = max(texture(uPrev, uv) * uTrailDecay - uFloor, 0.0);   // black outside the window
+  if (uv == clamp(uv, 0.0, 1.0)) echo = max(min(texture(uPrev, uv), 1.0) * uTrailDecay - uFloor, 0.0);   // black outside the window; capped at 1
 }
 fragColor = max(vec4(col, lum), echo);
 ```
@@ -447,9 +447,9 @@ Notes:
 2. **Show pass.** `show.frag` copies `cur` to the canvas: `clamp(buf.rgb + noise × grain × (0.15 + buf.a), 0, 1) × uMaster`, with the same hash and per-frame offset `(127, 311) × frame` as before. Grain and master live here so grain never piles up in the echoes and a blackout stays clean.
 3. `cur` and `prev` swap.
 
-- **Buffers:** two textures the size of the canvas, `RGBA16F` (needs `EXT_color_buffer_float`), linear, clamp to edge. RGB = the picture before grain and master (not clamped), alpha = `lum`. Without the extension: `RGBA8` and `uFloor = 1/255`, so echoes still reach black.
+- **Buffers:** two textures the size of the canvas, `RGBA16F` (needs `EXT_color_buffer_float`), linear, clamp to edge. RGB = the picture before grain and master (not clamped), alpha = `lum`. Without the extension: `RGBA8` and `uFloor = 1/255` per frame, so echoes still reach black (their longest life is then about 255 frames, whatever `trail` says). The echo read from `prev` is capped at 1, so a flash brighter than white starts fading at once.
 - **Allocated again and black** on resize, on context restore and on the first frame.
-- **Emptied, with the wall history:** on every frame while the master is 0; when a replay starts from blackout (B7.6); on the frame Fallback turns on or off.
+- **Emptied, with the wall history:** on every frame while the master is 0; from the moment a replay from blackout is asked for until the sequencer starts it (it finishes a running melt first, B7.6); on the frame Fallback turns on or off.
 - **Trails** (`trails.ts`, pure, per second so the look does not depend on the frame rate): `τ = TRAIL_MAX_S × trail²` (`TRAIL_MAX_S = 6` s), `uTrailDecay = τ > 0 ? exp(−dt/τ) : 0`. Each frame the echoes grow by `exp(push × PUSH_RATE × dt)` (`PUSH_RATE = 1.5`/s) and turn by `twist × TWIST_RATE × dt` turns (`TWIST_RATE = 0.25`), about the window centre; `uTrailM` is the inverse. Combine is `max` per channel, so colours stay pure. The trail values are the current ones for the whole window, also with a wall.
 - With `trail` 0 and a 1×1 wall the picture is the one the single pass drew.
 - **Fallback:** `uTrailDecay = 0` and a 1×1 wall, whatever the Look says.
@@ -554,7 +554,7 @@ The live layer (`LIVE = MAX_LAYERS − 1`) is a motif like any other for the sha
 - **Randomize(group?)** for every unlocked param (optionally only one group): `base` uniform in the rand range (log-uniform for log params); `react` uniform in 0…0.6 × `reactScale`, sign positive; `band` = table default with probability 0.5, else uniform among low, mid, high, beat, energy; `thr` uniform in 0…0.5. Options: `meltMode` uniform; `mirrorX`, `mirrorY` true with probability 0.25 each. Never touches `brightness`, `holdBeats`, `morphBeats`, `hueJumpEvery`.
 - **Mutate:** for every unlocked param, `base_norm += N(0, 0.08)`, `react += N(0, 0.1 × reactScale)`, `thr += N(0, 0.05)`, all clamped. Options unchanged. This is the tool for walking around a sweet spot.
 - **Zero** (key `0`): a plain, still line to build a look up from. Every `react` → 0; the bases of `rotation`, `spin`, `tiltAmt`, `tiltSpeed`, `mirrorShift`, `warpAmt`, `spikeAmp`, `waveAmt`, `ripple`, `glow`, `grain`, `trail`, `push`, `twist` → 0; all envelopes neutral; `hueJumpEvery` → 0; `session.autopilot` → 0 and `session.presetCycleMin` → 0 (a cycle recall would overwrite the look being built). Colour, thickness, zoom, brightness, the melt settings, the other options and locked params stay. Crossfades over 1 s. Undo restores the Look (not the autopilot or the preset cycle). While Ambient is on it is a whole new Look: nothing stays owed.
-- **Mutate all** leaves the `trail` base alone; the trails group's own Mutate moves it.
+- **Mutate all** leaves `trail` alone (base, react and thr); the trails group's own Mutate moves it.
 - **Reset(group?)**: back to table defaults. Reset of shape, line or colour also sets that group's envelope to neutral; Reset all sets all three.
 - **Envelopes** are part of the Look: recall crossfades their four numbers linearly; randomize and mutate never touch them.
 - **Undo:** ring of 30 Looks, pushed before randomize, mutate, reset and recall. Undo crossfades over 1 s.

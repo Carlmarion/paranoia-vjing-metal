@@ -184,7 +184,7 @@ function apply(msg: unknown): void {
   model = r.model;
   for (const e of r.effects) {
     if (e.t === 'seq') {
-      if (e.cmd.name === 'replay' && e.cmd.fromBlank) wipe = true; // B7.6: the drawing appears on black, with no old echo
+      if (e.cmd.name === 'replay' && e.cmd.fromBlank) blankReplay = true; // B7.6: the drawing appears on black, with no old echo
       seq.command(e.cmd);
     }
     else if (e.t === 'seqForget') seq.forget(e.layer);
@@ -293,6 +293,8 @@ let master = 1;
 /** Empty the scene buffers before the next draw (design 2026-11-25 §4.2). */
 let wipe = false;
 let wasFallback = false;
+/** A replay from blackout is waiting for the sequencer (it finishes a running melt first): keep the buffers empty until it starts. */
+let blankReplay = false;
 let frameNo = 0;
 let lastMs = performance.now();
 const startMs = lastMs;
@@ -336,7 +338,8 @@ function frame(nowMs: number): void {
   master = clamp(master + Math.sign(target - master) * (dt / BLACKOUT_FADE_S), 0, 1);
 
   // no echo survives a full blackout or a change of Fallback
-  if (master === 0 || fb !== wasFallback) wipe = true;
+  if (master === 0 || fb !== wasFallback || blankReplay) wipe = true;
+  if (seq.pending?.name !== 'replay') blankReplay = false; // started (or refused): this frame's wipe is the last
   wasFallback = fb;
 
   if (renderer) {

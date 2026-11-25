@@ -245,7 +245,7 @@ describe('trails in presets', () => {
   test('Randomize all and Mutate all never switch trails on; the trails Mutate moves it', () => {
     const rng = mulberry32(5);
     let l = defaultLook();
-    for (let i = 0; i < 200; i++) { l = mutate(randomize(l, rng), rng); expect(l.params.trail.base).toBe(0); }
+    for (let i = 0; i < 200; i++) { l = mutate(randomize(l, rng), rng); expect(l.params.trail).toEqual(defaultLook().params.trail); }
     let g = defaultLook(), moved = false;
     for (let i = 0; i < 20; i++) { g = mutate(g, rng, 'trails'); moved ||= g.params.trail.base > 0; }
     expect(moved).toBe(true);
