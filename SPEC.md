@@ -27,8 +27,8 @@ They talk over `BroadcastChannel('ferro')` (same origin, same Chrome profile, no
 ## A3. Hard constraints
 
 - Zero runtime dependencies. Raw WebGL2, Web Audio, DOM. No three.js, no UI library.
-- One fragment shader, one pass, exactly 2 texture samples per pixel. No raymarching, no 3D, no bevel lighting.
-- 60 fps at 1920×1080 on integrated graphics.
+- One scene shader with exactly 2 SDF samples per pixel (plus one read of the last frame while trails are on), drawn into an off-screen buffer, and one show pass (B5.1). No raymarching, no 3D, no bevel lighting.
+- 60 fps at 1920×1080 on integrated graphics, trails and wall included. If the largest wall can't hold it, lower `WALL_MAX`; the render scale is not touched.
 - No network at runtime.
 - Chrome only (latest stable).
 - Flash safety: by default, no full-screen luminance or hue jump more often than 3 times per second (see B6.3, B6.4 and B7.5). `calib.refractoryMs` can go below the cap; that is Carl's call during testing.
@@ -174,6 +174,9 @@ interface Look {
     hueJumpAmt: number;           // 0…0.5 turns
     holdBeats: 0 | 16 | 32 | 64 | 128;  // 0 = flow: always melting
     morphBeats: 4 | 8 | 16 | 32 | 64;
+    wallCols: number; wallRows: number;  // 1…8 (WALL_MAX); 1×1 = no wall (B5.2)
+    wallWave: 0 | 1 | 2 | 3 | 4;         // rows, snake, centre, diagonal, random
+    wallDelay: number;                   // 0…1 s between one wave step and the next
   };
   env: Record<'shape' | 'line' | 'colour', Env>;   // reaction envelope per group (B4.5); missing → neutral
 }
@@ -294,10 +297,15 @@ Units: motif space, the cell is −1…+1. A typical stroke half-width is 0.02�
 | glow | colour | lin | 0 | 1 | 0.15 | low | 0.3 | 0.2 | 0.1 | 85 | 0–0.5 |
 | glowWidth | colour | log | 0.02 | 0.4 | 0.12 | none | 0 | 0 | 0.1 | 125 | 0.04–0.3 |
 | grain | colour | lin | 0 | 0.3 | 0.04 | high | 0.3 | 0.3 | 0 | — | 0–0.12 |
+| trail | trails | lin | 0 | 1 | 0 | none | 0 | 0 | 0 | — | — |
+| push | trails | lin | −1 | 1 | 0 | none | 0 | 0 | 0 | — | −0.3–0.3 |
+| twist | trails | lin | −1 | 1 | 0 | none | 0 | 0 | 0 | — | −0.1–0.1 |
 
 **Zoom (v2).** Zoom is `log` 0.5…3, so it can fill the window. A row may carry `reactScale` (zoom: 0.5): randomize and mutate scale their react amounts by it (B8). `react` and `driftAmp` are normalised, so a v1 Look (lin 0.5…1.4) is converted on load: when it stores a numeric zoom react, `push = react × 0.9`, `react = sign(push) × |ln(max(base + push, 0.05) / base)| / ln 6`, clamped to −1…1, which keeps the same push at that base. A v1 zoom without a stored react takes the default.
 
-32 params → `uniform float uP[32];`. `params.ts` exports the GLSL header (`#define P_ZOOM uP[0]`, `#define P_ROTATION uP[1]` …, one line per row, names upper-cased) that `gl.ts` inserts after the `#version` line of the fragment source. GLSL ES has no `##` token pasting, so each name is its own macro.
+**Trails.** The `trails` group has no envelope. `trail` is never randomized and Mutate all skips it (B8), so neither can switch trails on. Old Looks have no entry for these ids and get the defaults (off).
+
+35 params → `uniform float uP[35];`. `params.ts` exports the GLSL header (`#define P_ZOOM uP[0]`, `#define P_ROTATION uP[1]` …, one line per row, names upper-cased) that `gl.ts` inserts after the `#version` line of the fragment source. GLSL ES has no `##` token pasting, so each name is its own macro.
 
 `waveFreq` is in cycles per motif unit. At 1080p the Nyquist limit is about 230, so values above that alias on purpose: this is the moiré effect.
 
@@ -307,6 +315,8 @@ A speed param that changes over time must not be multiplied by time (it jumps). 
 **Wobble tilt.** The lean is `tiltAmt` (how far, the one to drive with sound) along the direction `tiltAngle` (turns: 0 = right, 0.25 = up) plus a phase `uTiltPhase` that advances at `tiltSpeed` turns per minute (like spin, B4.3; it never glides back). `modulation.ts` sends the shader `uTilt = tiltAmt × (cos 2π(angle + phase), sin 2π(angle + phase))`. With speed 0 it is a fixed lean in any direction; with a slow speed each kick leans toward a different side. Old Looks with `tiltX` / `tiltY` are converted on load to the same lean: amount = length, angle = direction; a reaction carries over to the amount (×2, the new span is half the old), band and threshold from the axis with the larger reaction, and with no base lean the reaction's direction gives the angle.
 
 ### B4.4 Reach, zones and the stop (`reach.ts`)
+
+With a wall (B5.2) the line is cut at the cell edge, so "the window" below means **one cell**: `ax` and `ay` are the cell's half-extents in units of its short side (`wall.ts` `cellAspect`). At 1×1 that is the window.
 
 **Ink radius.** For every texture layer the Display keeps the largest distance from the cell centre, in motif units, of any texel with SDF ≤ 0 (`sdf.ts` `inkRadius`; a blank layer → 0). Baked layers are measured from `atlas.bin` at load, and every upload (drawn shapes, re-bakes, the live layer, replays) measures again. The radius used for a frame is `radius[A]`, or `max(radius[A], radius[B])` during a melt; layer 0 in fallback.
 
@@ -346,19 +356,21 @@ A sustained sound gives a sharp start, a sag to `sustain`, and a tail of `releas
 ```glsl
 precision highp float; precision highp sampler2DArray;
 uniform sampler2DArray uSdf;
-uniform float uP[31];
-uniform vec2  uRes;
+uniform sampler2D uPrev;                      // last frame's scene buffer (B5.1)
+uniform float uP[35];
+uniform vec2  uRes, uOrigin, uScreen;         // this cell's size and lower-left pixel; the whole buffer's size
+uniform mat2  uTrailM; uniform float uTrailDecay, uFloor;   // trails (B5.1)
 uniform float uMotifA, uMotifB, uMorphT;      // layer indices, eased morph 0…1
 uniform int   uMeltMode; uniform bool uMirrorX, uMirrorY;
 uniform vec2  uTilt;
-uniform float uWarpPhase, uSpikePhase, uWavePhase, uSpinPhase, uHueOffset, uMaster, uFrame;
+uniform float uWarpPhase, uSpikePhase, uWavePhase, uSpinPhase, uHueOffset;
 ```
 
 Pipeline, in this order:
 
 ```glsl
-// 1. Screen space: short side spans −1…+1
-vec2 s = (gl_FragCoord.xy - 0.5 * uRes) / (0.5 * min(uRes.x, uRes.y));
+// 1. Screen space: the cell's short side spans −1…+1
+vec2 s = (gl_FragCoord.xy - uOrigin - 0.5 * uRes) / (0.5 * min(uRes.x, uRes.y));
 vec2 p = s;
 
 // 2. Tilt (perspective skew), mirror, rotate (+ spin), zoom
@@ -412,9 +424,14 @@ vec3 rgb = hsv2rgb(vec3(fract(h), P_SAT, 1.0));
 float lum = mask * inner + (1.0 - mask) * g;
 vec3 col = rgb * lum * P_BRIGHTNESS;
 
-// 11. Grain (keeps the background black), master fade
-col += (hash(gl_FragCoord.xy + uFrame) - 0.5) * P_GRAIN * (0.15 + lum);
-fragColor = vec4(clamp(col, 0.0, 1.0) * uMaster, 1.0);
+// 11. Trails: the last frame, moved and faded (B5.1). Grain and master are in show.frag.
+vec4 echo = vec4(0.0);
+if (uTrailDecay > 0.0) {
+  float hs = 0.5 * min(uScreen.x, uScreen.y);
+  vec2 uv = (uTrailM * ((gl_FragCoord.xy - 0.5 * uScreen) / hs) * hs + 0.5 * uScreen) / uScreen;
+  if (uv == clamp(uv, 0.0, 1.0)) echo = max(texture(uPrev, uv) * uTrailDecay - uFloor, 0.0);   // black outside the window
+}
+fragColor = max(vec4(col, lum), echo);
 ```
 
 Notes:
@@ -422,7 +439,31 @@ Notes:
 - Noise is hash-based, no textures: an integer (`uint`) hash of `floor(p)`. `vnoise` and `fbm` return 0…1.
 - Draw one fullscreen triangle. Canvas size = CSS size × `min(devicePixelRatio, 1)` × `?scale=` (default 1).
 - On shader compile or link failure: keep the previous program, show the error in the debug overlay, and send it to the Control window. Never show a blank screen.
-- `uMaster` fades 1 → 0 over 1 s on blackout, and back.
+- `uMaster` fades 1 → 0 over 1 s on blackout, and back (show pass).
+
+### B5.1 Passes, buffers and trails (`gl.ts`, `show.frag`, `trails.ts`)
+
+1. **Scene pass.** `shader.frag` draws into the off-screen buffer `cur`, once per cell (B5.2), reading the previous buffer `prev` for the echoes.
+2. **Show pass.** `show.frag` copies `cur` to the canvas: `clamp(buf.rgb + noise × grain × (0.15 + buf.a), 0, 1) × uMaster`, with the same hash and per-frame offset `(127, 311) × frame` as before. Grain and master live here so grain never piles up in the echoes and a blackout stays clean.
+3. `cur` and `prev` swap.
+
+- **Buffers:** two textures the size of the canvas, `RGBA16F` (needs `EXT_color_buffer_float`), linear, clamp to edge. RGB = the picture before grain and master (not clamped), alpha = `lum`. Without the extension: `RGBA8` and `uFloor = 1/255`, so echoes still reach black.
+- **Allocated again and black** on resize, on context restore and on the first frame.
+- **Emptied, with the wall history:** on every frame while the master is 0; when a replay starts from blackout (B7.6); on the frame Fallback turns on or off.
+- **Trails** (`trails.ts`, pure, per second so the look does not depend on the frame rate): `τ = TRAIL_MAX_S × trail²` (`TRAIL_MAX_S = 6` s), `uTrailDecay = τ > 0 ? exp(−dt/τ) : 0`. Each frame the echoes grow by `exp(push × PUSH_RATE × dt)` (`PUSH_RATE = 1.5`/s) and turn by `twist × TWIST_RATE × dt` turns (`TWIST_RATE = 0.25`), about the window centre; `uTrailM` is the inverse. Combine is `max` per channel, so colours stay pure. The trail values are the current ones for the whole window, also with a wall.
+- With `trail` 0 and a 1×1 wall the picture is the one the single pass drew.
+- **Fallback:** `uTrailDecay = 0` and a 1×1 wall, whatever the Look says.
+
+### B5.2 The wall (`wall.ts`)
+
+`wallCols × wallRows` cells (1…`WALL_MAX` = 8 each). Every cell shows the same picture at a different moment.
+
+- **Cells:** edges at `floor(i × W / cols)` and `floor(j × H / rows)`; the shape is sized to the cell's short side; tilt, mirrors, zoom and `hueSpace` are per cell. Glow or line reaching a cell edge is cut there.
+- **Steps** (row 0 = top, column 0 = left): rows `row × cols + col` · snake (odd rows right to left) · centre `floor(max(|col − (cols−1)/2|, |row − (rows−1)/2|))` · diagonal `col + row` · random (a shuffle fixed per seed and size, on its own PRNG stream `wall`).
+- **Delay** of a cell = `step × wallDelay`; when the largest would pass `WALL_HISTORY_S = 6` s, all delays are scaled down so the last cell is 6 s late.
+- **History:** while the wall is larger than 1×1 the Display keeps the last 6 s of frame inputs (param values, phases, tilt, hue offset, both layers, `uMorphT`, melt mode, mirrors). A cell is drawn with the newest snapshot at least its delay old (the oldest one when history is shorter). So reactions and the melt cross the wall as a wave.
+- **Not delayed:** the trail values, grain and master, the meters and everything the dashboard shows, the sequencer, and the contents of the layers: live drawing appears in all cells at once.
+- Options jump on recall like the mirrors. Randomize and Zero leave the wall alone; Reset all removes it.
 
 ## B6. Audio (`src/display/audio/`)
 
@@ -509,10 +550,11 @@ The live layer (`LIVE = MAX_LAYERS − 1`) is a motif like any other for the sha
 
 - **16 slots.** `save(slot?)` writes the current Look to the given slot, or the first empty one, named `HH:MM:SS`. `rename`, `delete`.
 - **Recall** crossfades over `session.xfade` seconds: `base`, `react` and `thr` interpolate in normalised space (hue takes the shortest way round); `band`, `lock` and all `options` switch at the start.
-- **Default Look options:** `meltMode` 1 (fuse), `mirrorX` false, `mirrorY` false, `hueJumpEvery` 0, `hueJumpAmt` 0.25, `holdBeats` 32, `morphBeats` 16.
+- **Default Look options:** `meltMode` 1 (fuse), `mirrorX` false, `mirrorY` false, `hueJumpEvery` 0, `hueJumpAmt` 0.25, `holdBeats` 32, `morphBeats` 16, `wallCols` 1, `wallRows` 1, `wallWave` 0, `wallDelay` 0.12.
 - **Randomize(group?)** for every unlocked param (optionally only one group): `base` uniform in the rand range (log-uniform for log params); `react` uniform in 0…0.6 × `reactScale`, sign positive; `band` = table default with probability 0.5, else uniform among low, mid, high, beat, energy; `thr` uniform in 0…0.5. Options: `meltMode` uniform; `mirrorX`, `mirrorY` true with probability 0.25 each. Never touches `brightness`, `holdBeats`, `morphBeats`, `hueJumpEvery`.
 - **Mutate:** for every unlocked param, `base_norm += N(0, 0.08)`, `react += N(0, 0.1 × reactScale)`, `thr += N(0, 0.05)`, all clamped. Options unchanged. This is the tool for walking around a sweet spot.
-- **Zero** (key `0`): a plain, still line to build a look up from. Every `react` → 0; the bases of `rotation`, `spin`, `tiltAmt`, `tiltSpeed`, `mirrorShift`, `warpAmt`, `spikeAmp`, `waveAmt`, `ripple`, `glow`, `grain` → 0; all envelopes neutral; `hueJumpEvery` → 0; `session.autopilot` → 0 and `session.presetCycleMin` → 0 (a cycle recall would overwrite the look being built). Colour, thickness, zoom, brightness, the melt settings, the other options and locked params stay. Crossfades over 1 s. Undo restores the Look (not the autopilot or the preset cycle). While Ambient is on it is a whole new Look: nothing stays owed.
+- **Zero** (key `0`): a plain, still line to build a look up from. Every `react` → 0; the bases of `rotation`, `spin`, `tiltAmt`, `tiltSpeed`, `mirrorShift`, `warpAmt`, `spikeAmp`, `waveAmt`, `ripple`, `glow`, `grain`, `trail`, `push`, `twist` → 0; all envelopes neutral; `hueJumpEvery` → 0; `session.autopilot` → 0 and `session.presetCycleMin` → 0 (a cycle recall would overwrite the look being built). Colour, thickness, zoom, brightness, the melt settings, the other options and locked params stay. Crossfades over 1 s. Undo restores the Look (not the autopilot or the preset cycle). While Ambient is on it is a whole new Look: nothing stays owed.
+- **Mutate all** leaves the `trail` base alone; the trails group's own Mutate moves it.
 - **Reset(group?)**: back to table defaults. Reset of shape, line or colour also sets that group's envelope to neutral; Reset all sets all three.
 - **Envelopes** are part of the Look: recall crossfades their four numbers linearly; randomize and mutate never touch them.
 - **Undo:** ring of 30 Looks, pushed before randomize, mutate, reset and recall. Undo crossfades over 1 s.
@@ -579,10 +621,11 @@ Dark, low-luminance UI (the laptop must not light the room): background `#0b0b0d
 - Morph progress bar and beats remaining in the hold.
 - `autoAdvance` toggle, `order`, `holdBeats`, `morphBeats`.
 - Melt mode (3 buttons), mirror X, mirror Y, hue jump every, hue jump amount.
+- The wall (B5.2): `wall cols` and `wall rows` (1…8), `wave` (rows · snake · centre · diag · rnd), `wave delay` slider (0…1 s).
 - Spin button: sets the `spin` base to 1 turn/min when it is 0, else to 0; lit while the base is not 0.
 - Melt hold toggle with a wide scrub slider (`holdPos`).
 
-**Centre: one panel per group** (shape, melt, line, inner, colour). Header has Randomize, Mutate and Reset for that group. One row per param:
+**Centre: one panel per group** (shape, melt, line, inner, colour, trails). Header has Randomize, Mutate and Reset for that group. One row per param:
 
 The colour panel opens with the **colour strip**: the colour wheel laid flat at the live `sat`, with two handles for the at-rest colours at the screen centre, **glow** `G = hue − 0.2 × hueDepth` and **core** `C = hue + 0.3 × hueDepth` (a reference depth of 0.03, a typical line half-width). The handles map one-to-one to the params: `hueDepth = 2 × arc(G → C)` (signed shortest way, taken the way closest to the current depth so opposite handles never flip), `hue = G + 0.2 × hueDepth`. Dragging one handle keeps the other in place; dragging the band between them moves both (changes `hue` only); shift = fine. A bright **bracket** marks the colours on screen now, from live glow `hue_eff + hueOffset − 0.2 × hueDepth_eff` to live core `… + 10 × clamp(0.03 + thickness_eff, 0, 0.1) × hueDepth_eff`, capped at one turn: it stretches on thickness kicks, slides with drift and jumps with hue jumps. `hueSpace` is not drawn (it varies across the screen). Under the strip, a thin **hit lane** holds two markers: where a full hit (gate 1, at the current `reactMaster`) takes glow and core, i.e. the handles of `hue + reactMaster × react_hue` and `hueDepth + reactMaster × react_hueDepth × 2` (clamped). Dragging a marker solves the two reacts back (`react_hue` = the short arc / reactMaster, `react_hueDepth` = Δ / 2 / reactMaster, clamped to −1…1); a row whose band is `none` gets band `low` when its react leaves 0, so the reaction fires. Faint dashed lines in the strip mark the hit colours; the markers are hidden at `reactMaster` 0. The `hue` and `hueDepth` rows stay under the strip for react, band, thr, lock and fine control.
 
@@ -723,6 +766,8 @@ Same result as `tools/bake_sdf.py` (B2.2), computed in a Web Worker so the proje
 - **colour:** `hsv2rgb` matches the shader for the primaries and white; handles ↔ params round-trips within 1e-9 for `|hueDepth| < 1`; every handle pair gives params in range; moving one handle leaves the other colour unchanged; opposite handles follow the previous sign, equal handles give depth 0; the live span is glow → core, grows with thickness, shifts with `hueOffset`, and is capped at one turn.
 - **ambient:** on zeroes exactly the low, beat and high reactions and sets the envelopes, over 5 s; off gives the original back, keeps hand edits and skips a param whose band changed; recall and reset while on come out calm; a group reset while on keeps the other groups' stash; undo while on keeps a reaction re-added by hand and calms a pre-ambient entry; randomize while on leaves those reactions at 0; the stash survives a reload and a corrupt one is ignored; a v1 preset imported and recalled while on is migrated, calmed, and restored by Off.
 - **reach:** fill grows with zoom and mirrorShift; mirrorShift counts only on a mirrored axis and does not scale with zoom; tilt raises fill; the bisected limit gives fill 1 within 1e-3; a wider or taller window never lowers the limit; radius 0, glow 0 and a zero-size window give finite results. **Stop:** sound never raises zoom past the limit; the hand past it is kept; negative react still pulls in; zones do not move with the kick; stop off = B4.1. `inkRadius` of a known disc within 0.015.
+- **trails:** decay is 0 at `trail` 0 and 1/e after `TRAIL_MAX_S` at 1; decay and the matrix compose (two half steps = one step); the matrix is the identity at 0, 0.
+- **wall:** cell rectangles tile the buffer exactly; the steps of each wave; the random wave is a permutation fixed per seed and size; delays are capped at 6 s; the history returns the newest snapshot at or before `t`, the oldest when too early, and forgets beyond its span; options migrate and validate; Zero and Randomize all keep the wall, Reset all removes it.
 - **strokes:** smoothing keeps a straight raw line straight and never lags the raw point by more than one sample spacing; a point under R6 gives 6 points at the same radius, 60° apart, one group; X mirror negates x only; coverage of a known disc is within 2% of its area; slicing a path at `q × L` returns a prefix whose length is `q × L` within 1e-6, monotonic in `q`, and the whole list at `q = 1`; mid-group every copy is cut at the same length.
 - **raster:** `y = +0.8` maps to the top rows; one-point strokes draw a dot; eraser strokes paint `destination-out` in order; ink = alpha ≥ 128.
 - **sdf:** on a mask holding one centred disc, the field matches the analytic distance within 1 px everywhere, negative inside; a blank mask gives a constant `+2`; the 2×2 downsample is the mean; float16 round-trip of `|d| ≤ 2` is within 2e-3; the mask → float16 bake of a 1024² ring runs in under 60 ms in the test runner (the canvas raster step has no Node equivalent and is measured in the browser).
@@ -813,6 +858,14 @@ M0 passed on 14 Nov on the venue chain (mixer → Focusrite → Display → proj
 - Ambient: on the ambient track press `A`: the kick reactions fade out over 5 s; re-add one by hand; `A` again gives the rest back. Reload the Display while on: `AMBIENT` is still lit.
 - Colour: the strip's handles sit on the colours the projector shows at rest; the bracket stretches on kicks and jumps with hue jumps.
 - Note which constants to retune: `GLOW_CUTOFF` (0.08), `AMBIENT_ENV`, the zoom max (3).
+
+**M9 — Trails and the wall (1 h).** One techno track, `?src=in`, on the projector.
+- Zero (`0`), then raise `trail`: echoes appear and fade to black. `push` both ways (tunnel out, sink in), `twist` both ways. Put `push` on the kick: each kick throws a ring.
+- Tune: is `trail` at full long enough (`TRAIL_MAX_S`), are `push` and `twist` in a useful range (`PUSH_RATE`, `TWIST_RATE`), does the `max` combine look right or too foggy.
+- Wall: 3×2, then 8×8, each wave pattern; press Next: the melt sweeps across the wall. `wave delay` from 0 to 1 s.
+- Blackout, then **draw in ▶** with trails and wall on: the shape appears on clean black.
+- Fallback (`B`) with trails and wall on: a single plain shape at once.
+- Pass: 60 fps at 8×8 with trails on (else lower `WALL_MAX`); no console errors.
 
 ## D3. Symptom → knob
 

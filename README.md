@@ -56,6 +56,8 @@ In the dashboard, press **Draw** (or `P`). The modal always opens in not-live mo
 - **Envelopes:** the small curve in the shape, line and colour headers opens an attack / sustain / release editor. A = how fast an effect rises, S = how far it sags while the sound goes on (fatigue), R = how long it lingers. Each trigger draws a thin line along the curve; `hits/s` shows how often the group fires.
 - **Ambient** (`A`): calms everything driven by the kick, the beat and the highs over 5 s and lengthens the tails. Re-add reactions by hand; `A` again gives the rest back. Survives a Display reload.
 - **Zero** (`0`): a plain, still line. Every reaction and effect amount goes to 0, and the autopilot and the preset cycle stop; colour, thickness and zoom stay. Build the look up from there; Undo brings the old one back.
+- **Trails** (the `trails` panel): `trail` = how long echoes of the picture live (0 = off), `push` = echoes fly outward or sink inward, `twist` = echoes turn. Put a reaction on `push` and each kick throws a ring. Randomize all and Mutate all never switch trails on.
+- **Wall** (left column): `wall cols` × `wall rows` repeats the shape as a grid; `wave` picks the order the cells follow each other (rows, snake, centre, diagonal, random) and `wave delay` how much later each step is. Reactions and the melt cross the wall as a wave; the last cell is never more than 6 s late.
 - **Colour strip** (top of the colour panel): drag **glow** and **core** to set the two at-rest colours; drag between them to move both. The bright bracket shows the colours on screen right now.
 
 ## Show day
@@ -102,6 +104,7 @@ These are choices the spec left open, or interpretations made while building.
 - `public/presets/default.json` stores partial Looks: anything a preset leaves out comes from the table defaults.
 
 **Rendering**
+- The picture is drawn into an off-screen float buffer and shown by a second small shader that adds grain and the master fade (SPEC B5.1). Trails and the wall both build on this.
 - GLSL ES has no `##` token pasting, so `params.ts` emits one macro per param (`#define P_ZOOM uP[0]`). SPEC B4.2 and B5 are amended to match.
 - The warp and spike phases are never wrapped, because a wrap made the shape jump. The shader hash is an integer hash, which stays exact however large the phases grow. The wave phase wraps at 1000. SPEC B4.3 is amended to match.
 - Grain uses a per-frame offset of `(127, 311) × frame`, so the noise doesn't drift diagonally.
