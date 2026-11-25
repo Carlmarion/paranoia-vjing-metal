@@ -1,18 +1,22 @@
 // Control window (B10): a remote for the Display. Holds no state of its own — every control shows the
 // last `state` message, except a slider that is under the pointer.
 import './control.css';
-import { PARAMS, GROUPS, fromNorm, toNorm, type Band, type Group, type ParamDef } from '../shared/params';
+import { PARAMS, PARAM_INDEX, GROUPS, fromNorm, toNorm, type Band, type Group, type ParamDef } from '../shared/params';
 import {
   BANDS, HOLD_BEATS, MORPH_BEATS, HUE_JUMP_EVERY, MELT_MODES, ORDERS, PRESET_CYCLE_MIN, PRESET_SLOTS,
-  REACT_RANGE, THR_RANGE, HUE_JUMP_AMT_RANGE, SESSION_RANGES, CALIB_RANGES,
-  defaultSession, defaultCalib, defaultOptions, serialisePresets, parseJson,
-  type Session, type Calib, type LookOptions, type MeltMode, type HoldBeats, type MorphBeats, type HueJumpEvery, type Order,
+  REACT_RANGE, THR_RANGE, HUE_JUMP_AMT_RANGE, SESSION_RANGES, CALIB_RANGES, WALL_DELAY_RANGE, WALL_SIZES, WALL_WAVES,
+  ENV_GROUPS, defaultSession, defaultCalib, defaultOptions, isEnvGroup, neutralEnv, serialisePresets, parseJson,
+  type EnvGroup, type Session, type Calib, type LookOptions, type MeltMode, type HoldBeats, type MorphBeats, type HueJumpEvery, type Order,
+  type WallWave,
 } from '../shared/state';
 import { bandValue, createBroadcastTransport, type ControlMsg, type StateMsg, type MetersMsg } from '../shared/protocol';
 import { keyAction, isTyping } from '../shared/keys';
 import { h, button, lin, row, fmt, fileStamp, download, Slider, Seg, Meter, type Mapping } from './ui';
 import { ShapesColumn } from './shapes';
 import { DrawModal, type DrawDoc } from './draw';
+import { EnvEditor } from './envelope';
+import { HueStrip } from './huestrip';
+import { liveSpan } from '../shared/colour';
 
 const OFFLINE_AFTER_MS = 1000;
 const HELLO_EVERY_MS = 1000;
@@ -38,7 +42,7 @@ let metersDirty = false;
 let lastMetersAt = -Infinity;
 
 const setSession = (key: keyof Session, value: Session[keyof Session]): void => send({ t: 'setSession', key, value });
-const toggleSession = (key: 'autoAdvance' | 'frozen' | 'fallback' | 'blackout' | 'meltHold'): void => {
+const toggleSession = (key: 'autoAdvance' | 'frozen' | 'fallback' | 'blackout' | 'meltHold' | 'zoomStop'): void => {
   if (last) setSession(key, !last.state.session[key]);
 };
 const cmd = (name: Extract<ControlMsg, { t: 'cmd' }>['name'], arg?: unknown): void =>
@@ -106,6 +110,7 @@ const beatLed = h('span', 'led beat', undefined, top);
 const bpmEl = h('span', 'stat', '— bpm', top);
 h('span', 'spacer', undefined, top);
 const liveBadge = h('span', 'livebadge', 'LIVE', top);
+const ambientBadge = h('span', 'livebadge ambient', 'AMBIENT', top);
 const freezeBtn = toggleBtn('Freeze', () => toggleSession('frozen'), top);
 const fallbackBtn = toggleBtn('Fallback', () => toggleSession('fallback'), top);
 const blackoutBtn = toggleBtn('Blackout', () => toggleSession('blackout'), top, 'danger');
@@ -135,7 +140,13 @@ const orderSeg = new Seg<Order>(ORDERS, ['random', 'seq'], (v) => setSession('or
 
 const holdSeg = new Seg<HoldBeats>(HOLD_BEATS, HOLD_BEATS.map((v) => (v === 0 ? 'flow' : String(v))), (v) => send({ t: 'setOption', key: 'holdBeats', value: v }), row('hold beats', left));
 const morphSeg = new Seg<MorphBeats>(MORPH_BEATS, MORPH_BEATS.map(String), (v) => send({ t: 'setOption', key: 'morphBeats', value: v }), row('morph beats', left));
-const meltSeg = new Seg<MeltMode>(MELT_MODES, ['blend', 'fuse', 'spatial'], (v) => send({ t: 'setOption', key: 'meltMode', value: v }), row('melt', left));
+/** Hover reminders for the three melts, in the order of MELT_MODES. */
+const MELT_TIPS = [
+  'BLEND: the lines slide from the old shape to the new one. Clean and calm; the in-between is a thin mix of both.',
+  'FUSE: halfway, both shapes are on screen and stick together like liquid, then the old one lets go. The richest in-between. meltK = how sticky.',
+  'SPATIAL: the new shape eats the old one patch by patch, like a stain spreading. meltNoise = how patchy, meltNoiseScale = patch size.',
+];
+const meltSeg = new Seg<MeltMode>(MELT_MODES, ['blend', 'fuse', 'spatial'], (v) => send({ t: 'setOption', key: 'meltMode', value: v }), row('melt', left), MELT_TIPS);
 
 type BoolOption = 'mirrorX' | 'mirrorY';
 const toggleOption = (key: BoolOption): void => {
@@ -144,11 +155,15 @@ const toggleOption = (key: BoolOption): void => {
 const mirrorRow = row('mirror', left);
 const mirrorXBtn = toggleBtn('X', () => toggleOption('mirrorX'), mirrorRow);
 const mirrorYBtn = toggleBtn('Y', () => toggleOption('mirrorY'), mirrorRow);
-/** Speed (turns/min) the spin shortcut sets; pressing it again sets 0. */
-const SPIN_SHORTCUT_RPM = 1;
-const spinBtn = toggleBtn('spin', () => {
-  if (last) send({ t: 'setParam', id: 'spin', field: 'base', value: last.state.look.params.spin.base === 0 ? SPIN_SHORTCUT_RPM : 0 });
-}, row('rotate', left));
+// the wall (design 2026-11-25 §6.1): the shape repeated as cols × rows cells, each `delay` later along the wave
+const wallSize = (key: 'wallCols' | 'wallRows', label: string): Seg<number> =>
+  new Seg<number>(WALL_SIZES, WALL_SIZES.map(String), (v) => send({ t: 'setOption', key, value: v }), row(label, left));
+const wallColsSeg = wallSize('wallCols', 'wall cols');
+const wallRowsSeg = wallSize('wallRows', 'wall rows');
+const wallWaveSeg = new Seg<WallWave>(WALL_WAVES, ['rows', 'snake', 'centre', 'diag', 'rnd'],
+  (v) => send({ t: 'setOption', key: 'wallWave', value: v }), row('wave', left));
+const wallDelay = numSlider(left, 'wave delay', lin(...WALL_DELAY_RANGE), 'o:wallDelay',
+  (v) => ({ t: 'setOption', key: 'wallDelay', value: v }), defaultOptions().wallDelay, { unit: 's' });
 
 const hueEverySeg = new Seg<HueJumpEvery>(HUE_JUMP_EVERY, HUE_JUMP_EVERY.map((v) => (v === 0 ? 'off' : String(v))),
   (v) => send({ t: 'setOption', key: 'hueJumpEvery', value: v }), row('hue jump', left));
@@ -157,8 +172,10 @@ const hueAmt = numSlider(left, 'jump amt', lin(...HUE_JUMP_AMT_RANGE), 'o:hueJum
 
 const meltHoldRow = row('melt hold', left);
 const meltHoldBtn = toggleBtn('hold', () => toggleSession('meltHold'), meltHoldRow);
-const holdPos = numSlider(left, '', lin(...SESSION_RANGES.holdPos), 's:holdPos',
+const holdPos = numSlider(left, 'scrub', lin(...SESSION_RANGES.holdPos), 's:holdPos',
   (v) => ({ t: 'setSession', key: 'holdPos', value: v }), defaultSession().holdPos, { cls: 'scrub', readout: false });
+holdPos.slider.el.title = 'with hold on: drag to move the melt by hand, from the current shape (left) to the next one (right)';
+meltHoldBtn.title = 'stop the automatic melting and take the melt in hand with the scrub slider below';
 
 // ---------- centre: param groups ----------
 
@@ -178,6 +195,7 @@ function baseDetents(def: ParamDef): number[] {
     for (let t = Math.ceil(def.min / ROTATION_MARK_TURNS); t * ROTATION_MARK_TURNS <= def.max; t++) marks.push(toNorm(def, t * ROTATION_MARK_TURNS));
     return marks;
   }
+  if (def.id === 'tiltAngle') return [0, 1, 2, 3, 4, 5, 6, 7, 8].map((k) => k / 8); // every 45°
   return def.min < 0 && def.max > 0 ? [toNorm(def, 0)] : [];
 }
 
@@ -221,10 +239,27 @@ function paramRow(def: ParamDef, parent: HTMLElement): ParamRow {
   return { def, base, react, thr, band, lock };
 }
 
+const envEditors = {} as Record<EnvGroup, EnvEditor>;
+/** Design §7: glow and core handles set hue and hueDepth (same throttle keys as their base sliders). */
+const hueStrip = new HueStrip({
+  onInput: (hue, hueDepth) => {
+    queueSend('p:hue:base', { t: 'setParam', id: 'hue', field: 'base', value: hue });
+    queueSend('p:hueDepth:base', { t: 'setParam', id: 'hueDepth', field: 'base', value: hueDepth });
+  },
+  onReact: (react) => {
+    for (const id of ['hue', 'hueDepth'] as const) {
+      queueSend(`p:${id}:react`, { t: 'setParam', id, field: 'react', value: react[id] });
+      // a reaction on band 'none' would never fire: pulling a marker away gives the row the kick
+      if (react[id] !== 0 && last?.state.look.params[id].band === 'none') send({ t: 'setParam', id, field: 'band', value: 'low' });
+    }
+  },
+});
 for (const g of GROUPS) {
   const panel = h('div', 'panel', undefined, centre);
   const head = h('div', 'phead', undefined, panel);
   h('h2', '', g, head);
+  if (isEnvGroup(g)) envEditors[g] = envEditor(g, head, panel);
+  if (g === 'colour') panel.append(hueStrip.el);
   h('span', 'spacer', undefined, head);
   button('Randomize', () => cmd('randomize', g), head);
   button('Mutate', () => cmd('mutate', g), head);
@@ -232,6 +267,19 @@ for (const g of GROUPS) {
   const cols = h('div', 'prow pcols', undefined, panel);
   for (const c of ['', 'base', 'react', 'band', 'thr', 'lk']) h('span', '', c, cols);
   for (const def of PARAMS) if (def.group === (g as Group)) paramRows[PARAMS.indexOf(def)] = paramRow(def, panel);
+}
+
+/** Design §5.4: mini curve + arrow in the header, the editor under it (closed by default). */
+function envEditor(g: EnvGroup, head: HTMLElement, panel: HTMLElement): EnvEditor {
+  const ed = new EnvEditor({
+    onInput: (key, value) => queueSend(`e:${g}:${key}`, { t: 'setEnv', group: g, key, value }),
+    onReset: (key) => send({ t: 'setEnv', group: g, key, value: neutralEnv()[key] }),
+  });
+  head.append(ed.mini);
+  const arrow = button('▾', () => { ed.toggle(); arrow.classList.toggle('on', ed.isOpen); }, head, 'env-arrow');
+  arrow.title = 'reaction envelope';
+  panel.append(ed.el);
+  return ed;
 }
 
 // ---------- right: performance ----------
@@ -291,6 +339,8 @@ button('Randomize all', () => cmd('randomize'), lookRow);
 button('Mutate all', () => cmd('mutate'), lookRow);
 button('Undo', () => cmd('undo'), lookRow);
 button('Reset all', () => cmd('reset'), lookRow, 'danger');
+button('Zero (0)', () => cmd('zero'), lookRow, 'danger').title =
+  'a plain, still line: every reaction and effect amount to 0, autopilot and preset cycle off; colour, thickness and zoom stay; Undo brings it back';
 
 h('h2', '', 'Performance', right);
 const ds = defaultSession();
@@ -299,6 +349,12 @@ const sessSliders = {
   reactMaster: numSlider(right, 'reactMaster', lin(...SESSION_RANGES.reactMaster), 's:reactMaster', (v) => ({ t: 'setSession', key: 'reactMaster', value: v }), ds.reactMaster),
   xfade: numSlider(right, 'xfade', lin(...SESSION_RANGES.xfade), 's:xfade', (v) => ({ t: 'setSession', key: 'xfade', value: v }), ds.xfade, { unit: 's' }),
 };
+const ambientRow = row('ambient', right);
+const ambientBtn = toggleBtn('Ambient (A)', () => cmd('ambient'), ambientRow);
+ambientBtn.title = 'calm the kick, beat and high reactions over 5 s; press again to give them back';
+const stopRow = row('stop', right);
+const zoomStopBtn = toggleBtn('Zoom stop', () => toggleSession('zoomStop'), stopRow);
+zoomStopBtn.title = 'sound and autopilot cannot push zoom or mirror shift past the window edge';
 const cycleRow = row('cycle', right);
 const cycleSel = h('select', '', undefined, cycleRow);
 for (const m of PRESET_CYCLE_MIN) { const o = h('option', '', m === 0 ? 'off' : `${m} min`, cycleSel); o.value = String(m); }
@@ -374,21 +430,32 @@ function applyState(msg: StateMsg): void {
     rowBands[i] = ps.band;
   }
 
+  for (const g of ENV_GROUPS) envEditors[g].set(look.env[g]);
+  hueStrip.set(
+    look.params.hue.base, look.params.hueDepth.base,
+    { hue: look.params.hue.react, hueDepth: look.params.hueDepth.react }, session.reactMaster,
+  );
+
   const o: LookOptions = look.options;
   holdSeg.set(o.holdBeats);
   morphSeg.set(o.morphBeats);
   meltSeg.set(o.meltMode);
   hueEverySeg.set(o.hueJumpEvery);
   hueAmt.set(o.hueJumpAmt);
+  wallColsSeg.set(o.wallCols);
+  wallRowsSeg.set(o.wallRows);
+  wallWaveSeg.set(o.wallWave);
+  wallDelay.set(o.wallDelay);
   setOn(mirrorXBtn, o.mirrorX);
   setOn(mirrorYBtn, o.mirrorY);
-  setOn(spinBtn, look.params.spin.base !== 0);
 
   setOn(freezeBtn, session.frozen);
   setOn(fallbackBtn, session.fallback);
   setOn(blackoutBtn, session.blackout);
   setOn(autoBtn, session.autoAdvance);
   setOn(meltHoldBtn, session.meltHold);
+  setOn(zoomStopBtn, session.zoomStop);
+  setOn(ambientBtn, session.ambient);
   orderSeg.set(session.order);
   holdPos.set(session.holdPos);
   sessSliders.autopilot.set(session.autopilot);
@@ -405,6 +472,7 @@ function applyState(msg: StateMsg): void {
 
   applyCalib(c, msg.devices);
   liveBadge.classList.toggle('on', session.live);
+  ambientBadge.classList.toggle('on', session.ambient);
   draw.onSessionLive(session.live);
 }
 
@@ -441,6 +509,12 @@ function applyMeters(m: MetersMsg): void {
     r.base.setTick(m.values[i] ?? 0);
     r.thr.setBar(thrMap.toU(bandValue(rowBands[i], a)));
   }
+
+  for (const g of ENV_GROUPS) envEditors[g].addHits(m.envHits[g]);
+  const eff = (id: 'hue' | 'hueDepth' | 'thickness' | 'sat'): number => fromNorm(PARAMS[PARAM_INDEX[id]], m.values[PARAM_INDEX[id]] ?? 0);
+  hueStrip.setLive(liveSpan(eff('hue'), eff('hueDepth'), eff('thickness'), m.hueOffset), eff('sat'));
+  paramRows[PARAM_INDEX.zoom]?.base.setZones(...m.zones.zoom);
+  paramRows[PARAM_INDEX.mirrorShift]?.base.setZones(...m.zones.mirrorShift);
 
   shapes.mark(m.motifA, m.motifB, last?.state.session.queued ?? null);
   if (m.motifA !== lastMotifA) { lastMotifA = m.motifA; draw.onCurrent(); }

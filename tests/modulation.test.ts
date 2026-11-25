@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'vitest';
-import { createModulation, gate, modulate, modulateNorm } from '../src/display/modulation';
+import { createModulation, gate, modulate, modulateNorm, type Geom, type Modulation } from '../src/display/modulation';
 import { idleFrame } from '../src/display/audio/dsp';
 import { PARAMS, PARAM_INDEX, fromNorm, paramDef, toNorm, type ParamId } from '../src/shared/params';
-import type { AudioFrame } from '../src/shared/protocol';
+import { bandValue, type AudioFrame } from '../src/shared/protocol';
 import { defaultLook, defaultSession, type Look, type Session } from '../src/shared/state';
-import { mulberry32 } from '../src/shared/math';
+import { clamp01, mulberry32 } from '../src/shared/math';
 
 const frame = (o: Partial<AudioFrame> = {}): AudioFrame => ({ ...idleFrame(), silent: false, ...o });
 const noDrift = (): Session => ({ ...defaultSession(), autopilot: 0 });
@@ -71,10 +71,10 @@ describe('drift', () => {
   test('lock removes drift', () => {
     const look = defaultLook();
     const s = { ...defaultSession(), autopilot: 1 };
-    look.params.tiltX.lock = true;
-    for (const t of [0, 13, 77.7, 400, 9999]) expect(valueOf('tiltX', look, s, frame(), t)).toBeCloseTo(0, 9);
-    look.params.tiltX.lock = false;
-    const moved = [13, 77.7, 400, 9999].some((t) => Math.abs(valueOf('tiltX', look, s, frame(), t)) > 1e-3);
+    look.params.rotation.lock = true;
+    for (const t of [0, 13, 77.7, 400, 9999]) expect(valueOf('rotation', look, s, frame(), t)).toBeCloseTo(0, 9);
+    look.params.rotation.lock = false;
+    const moved = [13, 77.7, 400, 9999].some((t) => Math.abs(valueOf('rotation', look, s, frame(), t)) > 1e-3);
     expect(moved).toBe(true);
   });
 
@@ -82,16 +82,16 @@ describe('drift', () => {
     const look = defaultLook();
     for (const t of [5, 50, 500]) {
       expect(valueOf('sat', look, { ...defaultSession(), autopilot: 1 }, frame(), t)).toBeCloseTo(0.9, 6);
-      expect(valueOf('tiltY', look, { ...defaultSession(), autopilot: 0 }, frame(), t)).toBeCloseTo(0, 9);
-      expect(valueOf('tiltY', look, { ...defaultSession(), autopilot: 1, fallback: true }, frame(), t)).toBeCloseTo(0, 9);
+      expect(valueOf('rotation', look, { ...defaultSession(), autopilot: 0 }, frame(), t)).toBeCloseTo(0, 9);
+      expect(valueOf('rotation', look, { ...defaultSession(), autopilot: 1, fallback: true }, frame(), t)).toBeCloseTo(0, 9);
     }
   });
 
   test('drift amplitude is autopilot × driftAmp in normalised units', () => {
-    const d = paramDef('tiltX');
+    const d = paramDef('rotation');
     const look = defaultLook();
     for (let t = 0; t < 2000; t += 7.3) {
-      const u = modulateNorm(d, look.params.tiltX, PARAM_INDEX.tiltX, 0, 1, 1, t);
+      const u = modulateNorm(d, look.params.rotation, PARAM_INDEX.rotation, 0, 1, 1, t);
       expect(Math.abs(u - 0.5)).toBeLessThanOrEqual(d.driftAmp + 1e-9);
     }
   });
@@ -186,5 +186,192 @@ describe('spin (B4.3)', () => {
       }
       expect(m.spinPhase).toBe(0);
     }
+  });
+});
+
+describe('the stop and the zones (design §4.4, §4.5)', () => {
+  const geom: Geom = { radius: 0.8, ax: 1, ay: 1, morphing: false };
+  /** No drift; nothing but zoom/mirrorShift grows the picture; zoom reacts fully to low. */
+  function quietLook(): Look {
+    const look = defaultLook();
+    for (const id of ['thickness', 'spikeAmp', 'warpAmt', 'tiltAmt'] as const) {
+      look.params[id].base = 0;
+      look.params[id].react = 0;
+    }
+    look.params.zoom = { base: 1, react: 1, band: 'low', thr: 0, lock: false };
+    return look;
+  }
+  function run(look: Look, session: Session, fr: AudioFrame): Modulation {
+    const m = createModulation();
+    modulate(m, look, session, fr, 0, 1 / 60, geom);
+    return m;
+  }
+  const z = paramDef('zoom');
+  const ms = paramDef('mirrorShift');
+
+  test('sound stops at the red line; with the stop off it passes', () => {
+    const on = run(quietLook(), noDrift(), frame({ low: 1 })).values[PARAM_INDEX.zoom];
+    expect(on).toBeCloseTo(1.25, 3);
+    const off = run(quietLook(), { ...noDrift(), zoomStop: false }, frame({ low: 1 })).values[PARAM_INDEX.zoom];
+    expect(off).toBeCloseTo(fromNorm(z, clamp01(toNorm(z, 1) + 1)), 6);
+  });
+
+  test('the hand past red is never pulled back', () => {
+    const look = quietLook();
+    look.params.zoom.base = 1.5;
+    expect(run(look, noDrift(), frame({ low: 1 })).values[PARAM_INDEX.zoom]).toBe(1.5);
+  });
+
+  test('negative react still pulls in', () => {
+    const look = quietLook();
+    look.params.zoom.react = -1;
+    look.params.zoom.base = 1.5;
+    expect(run(look, noDrift(), frame({ low: 1 })).values[PARAM_INDEX.zoom]).toBeLessThan(1.5);
+  });
+
+  test('mirror shift stops where the ink touches, with zoom at its hand value', () => {
+    const look = quietLook();
+    look.params.zoom.react = 0;
+    look.options.mirrorY = true;
+    look.params.mirrorShift = { base: 0, react: 1, band: 'low', thr: 0, lock: false };
+    expect(run(look, noDrift(), frame({ low: 1 })).values[PARAM_INDEX.mirrorShift]).toBeCloseTo(0.2, 3);
+  });
+
+  test('zones use the picture at rest: they do not move with the kick', () => {
+    const quiet = run(quietLook(), noDrift(), frame({ low: 0 })).zones.zoom;
+    const kick = run(quietLook(), noDrift(), frame({ low: 1 })).zones.zoom;
+    expect(quiet[1]).toBeCloseTo(toNorm(z, 1.25), 3);
+    expect(kick).toEqual(quiet);
+    expect(quiet[0]).toBeLessThanOrEqual(quiet[1]);
+  });
+
+  test('no mirror → no mirror-shift zones; mirror → zones', () => {
+    expect(run(quietLook(), noDrift(), frame()).zones.mirrorShift).toEqual([1, 1]);
+    const look = quietLook();
+    look.options.mirrorY = true;
+    expect(run(look, noDrift(), frame()).zones.mirrorShift[1]).toBeCloseTo(toNorm(ms, 0.2), 3);
+  });
+
+  test('fallback and no geometry: no stop', () => {
+    const free = fromNorm(z, clamp01(toNorm(z, 1) + 1));
+    expect(run(quietLook(), { ...noDrift(), fallback: true }, frame({ low: 1 })).values[PARAM_INDEX.zoom]).toBeCloseTo(free, 6);
+    const m = createModulation();
+    modulate(m, quietLook(), noDrift(), frame({ low: 1 }), 0, 1 / 60);
+    expect(m.values[PARAM_INDEX.zoom]).toBeCloseTo(free, 6);
+    expect(m.zones.zoom).toEqual([1, 1]);
+  });
+});
+
+describe('envelope stage (design §5.2)', () => {
+  const kickLook = (): Look => {
+    const look = defaultLook();
+    look.params.zoom = { base: 0.85, react: 0.5, band: 'low', thr: 0, lock: false };
+    look.params.waveAmt = { base: 0.4, react: 0.3, band: 'low', thr: 0, lock: false };
+    return look;
+  };
+
+  test('neutral envelopes: 600 random frames equal the B4.1 formula exactly', () => {
+    const rng = mulberry32(17);
+    const look = defaultLook();
+    for (const def of PARAMS) {
+      look.params[def.id].react = rng() * 2 - 1;
+      look.params[def.id].band = (['low', 'mid', 'high', 'beat', 'energy', 'none'] as const)[Math.floor(rng() * 6)];
+      look.params[def.id].thr = rng() * 0.5;
+    }
+    const session: Session = { ...defaultSession(), zoomStop: false };
+    const m = createModulation();
+    for (let f = 0; f < 600; f++) {
+      const fr = frame({ low: rng(), mid: rng(), high: rng(), beat: rng(), energy: rng() });
+      const dt = 1 / (30 + rng() * 90);
+      modulate(m, look, session, fr, f * 0.01, dt);
+      for (let i = 0; i < PARAMS.length; i++) {
+        const def = PARAMS[i];
+        const ps = look.params[def.id];
+        const u = modulateNorm(def, ps, i, bandValue(ps.band, fr), session.autopilot, session.reactMaster, f * 0.01);
+        expect(m.norm[i]).toBe(Math.fround(u));
+      }
+    }
+  });
+
+  test('a shape tail lingers after the sound stops; inner has no envelope', () => {
+    const look = kickLook();
+    look.env.shape = { attack: 0, sustain: 1, decay: 1, release: 2 };
+    const m = createModulation();
+    for (let i = 0; i < 30; i++) modulate(m, look, noDrift(), frame({ low: 1 }), 0, 1 / 60);
+    for (let i = 0; i < 60; i++) modulate(m, look, noDrift(), frame({ low: 0 }), 0, 1 / 60);
+    expect(m.values[PARAM_INDEX.zoom]).toBeGreaterThan(0.86);
+    expect(m.values[PARAM_INDEX.waveAmt]).toBeCloseTo(0.4, 6);
+  });
+
+  test('each crossing of the threshold is one hit; a held sound is one hit (Carl: trigger lines)', () => {
+    const look = kickLook();
+    look.params.zoom.thr = 0.2;
+    const m = createModulation();
+    for (let k = 0; k < 5; k++) {
+      for (let i = 0; i < 6; i++) modulate(m, look, noDrift(), frame({ low: 1 }), 0, 1 / 60);
+      for (let i = 0; i < 20; i++) modulate(m, look, noDrift(), frame({ low: 0 }), 0, 1 / 60);
+    }
+    expect(m.envHits.shape).toBe(5);
+    for (let i = 0; i < 300; i++) modulate(m, look, noDrift(), frame({ low: 1 }), 0, 1 / 60);
+    expect(m.envHits.shape).toBe(6);
+  });
+
+  test('wobbling around the threshold does not count twice (hysteresis)', () => {
+    const look = kickLook();
+    look.params.zoom.thr = 0;
+    const m = createModulation();
+    for (let i = 0; i < 60; i++) modulate(m, look, noDrift(), frame({ low: i % 2 ? 0.3 : 0.1 }), 0, 1 / 60);
+    expect(m.envHits.shape).toBe(1);
+  });
+
+  test('params with react 0 or band none do not count; inner has no hits', () => {
+    const look = defaultLook();
+    for (const def of PARAMS) look.params[def.id].react = 0;
+    look.params.thickness = { base: 0, react: 0, band: 'low', thr: 0, lock: false };
+    const m = createModulation();
+    modulate(m, look, noDrift(), frame({ low: 1 }), 0, 1 / 60);
+    expect(m.envHits.line).toBe(0);
+    expect((m.envHits as Record<string, unknown>).inner).toBeUndefined();
+  });
+
+});
+
+describe('wobble tilt', () => {
+  const tiltLook = (amt: number, angle: number, speed = 0): Look => {
+    const look = defaultLook();
+    look.params.tiltAmt = { base: amt, react: 0, band: 'none', thr: 0, lock: false };
+    look.params.tiltAngle = { base: angle, react: 0, band: 'none', thr: 0, lock: false };
+    look.params.tiltSpeed = { base: speed, react: 0, band: 'none', thr: 0, lock: false };
+    return look;
+  };
+
+  test('amount and angle give the lean vector', () => {
+    const m = createModulation();
+    modulate(m, tiltLook(0.2, 0), noDrift(), frame(), 0, 1 / 60);
+    expect(m.tilt[0]).toBeCloseTo(0.2, 6);
+    expect(m.tilt[1]).toBeCloseTo(0, 6);
+    modulate(m, tiltLook(0.2, 0.25), noDrift(), frame(), 0, 1 / 60);
+    expect(m.tilt[0]).toBeCloseTo(0, 6);
+    expect(m.tilt[1]).toBeCloseTo(0.2, 6);
+  });
+
+  test('speed turns the direction: 6 turns/min is one turn in 10 s, a quarter in 2.5 s', () => {
+    const m = createModulation();
+    for (let i = 0; i < 150; i++) modulate(m, tiltLook(0.2, 0, 6), noDrift(), frame(), 0, 1 / 60);
+    expect(m.tilt[0]).toBeCloseTo(0, 3);
+    expect(m.tilt[1]).toBeCloseTo(0.2, 3);
+    for (let i = 0; i < 450; i++) modulate(m, tiltLook(0.2, 0, 6), noDrift(), frame(), 0, 1 / 60);
+    expect(m.tilt[0]).toBeCloseTo(0.2, 3);
+  });
+
+  test('the sound drives the amount: no lean at rest, a lean on the kick', () => {
+    const look = tiltLook(0, 0.125);
+    look.params.tiltAmt = { base: 0, react: 0.5, band: 'low', thr: 0, lock: false };
+    const m = createModulation();
+    modulate(m, look, noDrift(), frame({ low: 0 }), 0, 1 / 60);
+    expect(Math.hypot(m.tilt[0], m.tilt[1])).toBe(0);
+    modulate(m, look, noDrift(), frame({ low: 1 }), 0, 1 / 60);
+    expect(Math.hypot(m.tilt[0], m.tilt[1])).toBeCloseTo(0.2, 6);
+    expect(m.tilt[0]).toBeCloseTo(m.tilt[1], 6);
   });
 });

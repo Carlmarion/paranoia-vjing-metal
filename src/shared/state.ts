@@ -1,6 +1,6 @@
 // State model (B3): types, defaults, serialise, migrate, safe storage.
-import { PARAMS, PARAM_IDS, type Band, type ParamDef, type ParamId } from './params';
-import { clamp } from './math';
+import { PARAMS, PARAM_IDS, paramDef, type Band, type ParamDef, type ParamId } from './params';
+import { clamp, fract } from './math';
 
 export type { Band } from './params';
 
@@ -11,6 +11,9 @@ export type HueJumpEvery = 0 | 1 | 2 | 4 | 8 | 16;
 export type HoldBeats = 0 | 16 | 32 | 64 | 128;
 export type MorphBeats = 4 | 8 | 16 | 32 | 64;
 
+/** How the wave crosses the wall: 0 rows (reading order), 1 snake, 2 centre outward, 3 diagonal, 4 random. */
+export type WallWave = 0 | 1 | 2 | 3 | 4;
+
 export interface LookOptions {
   meltMode: MeltMode; // 0 blend, 1 fuse, 2 spatial
   mirrorX: boolean;
@@ -19,10 +22,42 @@ export interface LookOptions {
   hueJumpAmt: number; // 0…0.5 turns
   holdBeats: HoldBeats;
   morphBeats: MorphBeats;
+  wallCols: number; // 1…WALL_MAX; 1×1 = no wall
+  wallRows: number;
+  wallWave: WallWave;
+  wallDelay: number; // seconds between one wave step and the next
 }
 
+/** Design §5: the groups that have a reaction envelope (melt and inner react directly). */
+export type EnvGroup = 'shape' | 'line' | 'colour';
+export const ENV_GROUPS: EnvGroup[] = ['shape', 'line', 'colour'];
+export const isEnvGroup = (g: unknown): g is EnvGroup => ENV_GROUPS.includes(g as EnvGroup);
+
+/** One value per envelope group. */
+export function perEnvGroup<T>(f: (g: EnvGroup) => T): Record<EnvGroup, T> {
+  return { shape: f('shape'), line: f('line'), colour: f('colour') };
+}
+
+/** attack, decay, release in seconds; sustain 0…1 (1 = no fatigue). */
+export interface Env { attack: number; sustain: number; decay: number; release: number; }
+export const ENV_RANGES = {
+  attack: [0, 2], sustain: [0, 1], decay: [0.05, 10], release: [0, 20],
+} as const satisfies Record<keyof Env, readonly [number, number]>;
+export const ENV_KEYS = Object.keys(ENV_RANGES) as (keyof Env)[];
+
+/** Returns its input exactly: old Looks render as before. */
+export function neutralEnv(): Env { return { attack: 0, sustain: 1, decay: 1, release: 0 }; }
+
+/** Current Look format. v2: zoom is log 0.5…3 (react converted from the v1 lin 0.5…1.4 range). */
+export const LOOK_VERSION = 2;
+
 /** A Look is what a preset stores. */
-export interface Look { params: Record<ParamId, ParamState>; options: LookOptions; }
+export interface Look {
+  v: typeof LOOK_VERSION;
+  params: Record<ParamId, ParamState>;
+  options: LookOptions;
+  env: Record<EnvGroup, Env>;
+}
 
 export type Order = 'random' | 'sequential';
 export type PresetCycleMin = 0 | 2 | 5 | 10;
@@ -43,6 +78,10 @@ export interface Session {
   queued: number | null;
   /** The live layer is on the projector (B12.5). Never persisted. */
   live: boolean;
+  /** Design §4.4: sound and drift cannot push zoom or mirror shift past the window edge. */
+  zoomStop: boolean;
+  /** Design §6: Ambient mode is on. Set only by the `ambient` command (and at boot from a stored stash). */
+  ambient: boolean;
 }
 
 /** Venue-dependent. Never stored in presets. */
@@ -81,6 +120,11 @@ export const PRESET_CYCLE_MIN: PresetCycleMin[] = [0, 2, 5, 10];
 export const REACT_RANGE: [number, number] = [-1, 1];
 export const THR_RANGE: [number, number] = [0, 0.95];
 export const HUE_JUMP_AMT_RANGE: [number, number] = [0, 0.5];
+/** Most columns and rows of the wall. Lower it if the show laptop can't hold 60 fps (SPEC A3). */
+export const WALL_MAX = 8;
+export const WALL_SIZES: number[] = Array.from({ length: WALL_MAX }, (_, i) => i + 1);
+export const WALL_WAVES: WallWave[] = [0, 1, 2, 3, 4];
+export const WALL_DELAY_RANGE: [number, number] = [0, 1];
 
 export const SESSION_RANGES = {
   autopilot: [0, 1], reactMaster: [0, 2], xfade: [0, 8], holdPos: [0, 1],
@@ -98,13 +142,19 @@ export function defaultParamState(def: ParamDef): ParamState {
 }
 
 export function defaultOptions(): LookOptions {
-  return { meltMode: 1, mirrorX: false, mirrorY: false, hueJumpEvery: 0, hueJumpAmt: 0.25, holdBeats: 32, morphBeats: 16 };
+  return { meltMode: 1, mirrorX: false, mirrorY: false, hueJumpEvery: 0, hueJumpAmt: 0.25, holdBeats: 32, morphBeats: 16,
+    wallCols: 1, wallRows: 1, wallWave: 0, wallDelay: 0.12,
+  };
 }
 
 export function defaultLook(): Look {
   const params = {} as Record<ParamId, ParamState>;
   for (const def of PARAMS) params[def.id] = defaultParamState(def);
-  return { params, options: defaultOptions() };
+  return { v: LOOK_VERSION, params, options: defaultOptions(), env: neutralEnvs() };
+}
+
+export function neutralEnvs(): Record<EnvGroup, Env> {
+  return perEnvGroup(neutralEnv);
 }
 
 /** B7.5 fallback: table defaults, react zero except zoom and brightness. */
@@ -118,8 +168,8 @@ export function fallbackLook(): Look {
 
 export function defaultSession(): Session {
   return {
-    autopilot: 0.5, reactMaster: 1, xfade: 3, autoAdvance: true, order: 'random', presetCycleMin: 0,
-    frozen: false, fallback: false, blackout: false, meltHold: false, holdPos: 0, queued: null, live: false,
+    autopilot: 0, reactMaster: 1, xfade: 3, autoAdvance: true, order: 'random', presetCycleMin: 0,
+    frozen: false, fallback: false, blackout: false, meltHold: false, holdPos: 0, queued: null, live: false, zoomStop: true, ambient: false,
   };
 }
 
@@ -174,16 +224,86 @@ export function migrateOptions(v: unknown): LookOptions {
     hueJumpAmt: num(v.hueJumpAmt, HUE_JUMP_AMT_RANGE[0], HUE_JUMP_AMT_RANGE[1], d.hueJumpAmt),
     holdBeats: oneOf(v.holdBeats, HOLD_BEATS, d.holdBeats),
     morphBeats: oneOf(v.morphBeats, MORPH_BEATS, d.morphBeats),
+    wallCols: oneOf(v.wallCols, WALL_SIZES, d.wallCols),
+    wallRows: oneOf(v.wallRows, WALL_SIZES, d.wallRows),
+    wallWave: oneOf(v.wallWave, WALL_WAVES, d.wallWave),
+    wallDelay: num(v.wallDelay, WALL_DELAY_RANGE[0], WALL_DELAY_RANGE[1], d.wallDelay),
   };
 }
 
-/** Any partial Look → full Look. Missing params/options take table defaults. */
+/** v1 zoom range (lin), used only to convert old reacts. */
+const V1_ZOOM_SPAN = 1.4 - 0.5;
+
+/**
+ * Design §4.1: a v1 zoom react (normalised over lin 0.5…1.4) → the v2 react (normalised over log 0.5…3)
+ * that gives the same push at `base`.
+ */
+export function migrateZoomReact(reactOld: number, base: number): number {
+  const def = paramDef('zoom');
+  const push = reactOld * V1_ZOOM_SPAN;
+  if (push === 0) return 0;
+  const r = Math.abs(Math.log(Math.max(base + push, 0.05) / base)) / Math.log(def.max / def.min);
+  return clamp(Math.sign(push) * r, REACT_RANGE[0], REACT_RANGE[1]);
+}
+
+export function migrateEnv(v: unknown): Env {
+  const d = neutralEnv();
+  if (!isObj(v)) return d;
+  const r = ENV_RANGES;
+  return {
+    attack: num(v.attack, r.attack[0], r.attack[1], d.attack),
+    sustain: num(v.sustain, r.sustain[0], r.sustain[1], d.sustain),
+    decay: num(v.decay, r.decay[0], r.decay[1], d.decay),
+    release: num(v.release, r.release[0], r.release[1], d.release),
+  };
+}
+
+function migrateEnvs(v: unknown): Record<EnvGroup, Env> {
+  const src = isObj(v) ? v : {};
+  return perEnvGroup((g) => migrateEnv(src[g]));
+}
+
+/** Old tilt: lin −0.4…0.4 per axis (normalised span 0.8). New tiltAmt: lin 0…0.4 (span 0.4). */
+const OLD_TILT_MAX = 0.4;
+const OLD_TILT_SPAN = 0.8;
+const TILT_AMT_SPAN = 0.4;
+
+/**
+ * A stored tiltX / tiltY pair → tiltAmt + tiltAngle with the same lean: amount = length, angle = direction (turns).
+ * A reaction carries over to the amount (the larger axis gives band and threshold); with no base lean, the
+ * reaction's direction gives the angle.
+ */
+function migrateTilt(p: Record<string, unknown>, params: Record<ParamId, ParamState>): void {
+  if (isObj(p.tiltAmt) || (!isObj(p.tiltX) && !isObj(p.tiltY))) return;
+  const axis = (v: unknown): { base: number; react: number; band: Band; thr: number; lock: boolean } => {
+    const o = isObj(v) ? v : {};
+    return {
+      base: num(o.base, -OLD_TILT_MAX, OLD_TILT_MAX, 0), react: num(o.react, REACT_RANGE[0], REACT_RANGE[1], 0),
+      band: oneOf(o.band, BANDS, 'none'), thr: num(o.thr, THR_RANGE[0], THR_RANGE[1], 0), lock: bool(o.lock, false),
+    };
+  };
+  const x = axis(p.tiltX), y = axis(p.tiltY);
+  const lead = Math.abs(x.react) >= Math.abs(y.react) ? x : y;
+  const amt = Math.hypot(x.base, y.base);
+  const dir = amt > 0 ? Math.atan2(y.base, x.base) : Math.atan2(y.react, x.react);
+  params.tiltAmt = {
+    base: clamp(amt, 0, OLD_TILT_MAX),
+    react: clamp((Math.hypot(x.react, y.react) * OLD_TILT_SPAN) / TILT_AMT_SPAN, REACT_RANGE[0], REACT_RANGE[1]),
+    band: lead.band, thr: lead.thr, lock: x.lock || y.lock,
+  };
+  params.tiltAngle = { ...params.tiltAngle, base: fract(dir / (2 * Math.PI)), lock: x.lock || y.lock };
+}
+
+/** Any partial Look → full Look. Missing params/options take table defaults; v1 Looks are converted. */
 export function migrateLook(v: unknown): Look {
   const src = isObj(v) ? v : {};
   const params = {} as Record<ParamId, ParamState>;
   const p = isObj(src.params) ? src.params : {};
   for (const def of PARAMS) params[def.id] = migrateParamState(p[def.id], def);
-  return { params, options: migrateOptions(src.options) };
+  migrateTilt(p, params);
+  const version = typeof src.v === 'number' ? src.v : 1;
+  if (version < 2 && isObj(p.zoom) && typeof p.zoom.react === 'number') params.zoom.react = migrateZoomReact(params.zoom.react, params.zoom.base);
+  return { v: LOOK_VERSION, params, options: migrateOptions(src.options), env: migrateEnvs(src.env) };
 }
 
 export function migratePreset(v: unknown): Preset | null {
@@ -239,6 +359,7 @@ export function parseJson(text: string | null): unknown {
 
 export const STORAGE_KEYS = {
   presets: 'ferro.presets.v1', calib: 'ferro.calib.v1', look: 'ferro.look.v1', pool: 'ferro.pool.v1',
+  ambient: 'ferro.ambient.v1',
 } as const;
 
 /** The subset of `Storage` we use, injectable for tests. */

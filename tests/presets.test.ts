@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'vitest';
 import {
   cloneLook, exportFilename, exportPresets, fadeLook, importPresets, lerpLook, mutate, popUndo, presetName, pushUndo,
-  randomize, renamePreset, deletePreset, resetLook, savePreset, startFade, stepFade, UNDO_SIZE,
+  randomize, renamePreset, deletePreset, resetLook, savePreset, startFade, stepFade, zeroLook, UNDO_SIZE, ZERO_BASES,
 } from '../src/display/presets';
 import { GROUPS, PARAMS, paramDef } from '../src/shared/params';
-import { defaultLook, defaultOptions, emptyPresets, migratePresets, type Look } from '../src/shared/state';
+import { ENV_GROUPS, defaultLook, defaultOptions, emptyPresets, migratePresets, neutralEnv, type Look } from '../src/shared/state';
 import { mulberry32 } from '../src/shared/math';
 
 const NOW = new Date(2026, 10, 19, 21, 5, 9).getTime();
@@ -132,6 +132,12 @@ describe('randomize', () => {
     expect(d.scale).toBe('log');
   });
 
+  test('zoom react is scaled by reactScale (0.5): never above 0.3', () => {
+    const rng = mulberry32(21);
+    for (let i = 0; i < 200; i++) expect(randomize(defaultLook(), rng).params.zoom.react).toBeLessThanOrEqual(0.3);
+    expect(paramDef('zoom').reactScale).toBe(0.5);
+  });
+
   test('is deterministic for a seed and does not mutate its input', () => {
     const base = defaultLook();
     const snapshot = cloneLook(base);
@@ -152,6 +158,21 @@ describe('mutate', () => {
       expect(next.options).toEqual(look.options);
       look = next;
     }
+  });
+
+  test('zoom react steps have about half the spread of another param', () => {
+    const rng = mulberry32(22);
+    let sz = 0, sw = 0;
+    const n = 2000;
+    for (let i = 0; i < n; i++) {
+      const look = defaultLook();
+      look.params.zoom.react = 0; look.params.warpAmt.react = 0;
+      const m = mutate(look, rng);
+      sz += m.params.zoom.react ** 2; sw += m.params.warpAmt.react ** 2;
+    }
+    const ratio = Math.sqrt(sz / n) / Math.sqrt(sw / n);
+    expect(ratio).toBeGreaterThan(0.4);
+    expect(ratio).toBeLessThan(0.6);
   });
 
   test('moves unlocked params by small steps', () => {
@@ -176,6 +197,68 @@ describe('reset', () => {
   });
 });
 
+describe('zero', () => {
+  test('every reaction and effect amount goes to 0; envelopes neutral; hue jumps off', () => {
+    const l = lookedUp();
+    l.params.warpAmt.base = 0.1;
+    l.params.glow.base = 0.6;
+    l.env.shape = { attack: 0.5, sustain: 0.4, decay: 2, release: 3 };
+    l.options.hueJumpEvery = 4;
+    const z = zeroLook(l);
+    for (const def of PARAMS) if (def.id !== 'hue') expect(z.params[def.id].react).toBe(0);
+    for (const id of ZERO_BASES) expect(z.params[id].base).toBe(0);
+    for (const g of ENV_GROUPS) expect(z.env[g]).toEqual(neutralEnv());
+    expect(z.options.hueJumpEvery).toBe(0);
+  });
+
+  test('colour, thickness, zoom, melt, mirrors and the other options stay; the input is not changed', () => {
+    const l = lookedUp();
+    l.params.thickness.base = 0.03;
+    l.params.sat.base = 0.5;
+    l.options.mirrorX = true;
+    const before = cloneLook(l);
+    const z = zeroLook(l);
+    for (const id of ['zoom', 'thickness', 'sat', 'brightness', 'hueDepth', 'meltK', 'linger', 'glowWidth', 'spikeFreq'] as const) {
+      expect(z.params[id].base).toBe(l.params[id].base);
+    }
+    expect(z.options).toEqual({ ...l.options, hueJumpEvery: 0 });
+    expect(l).toEqual(before);
+  });
+
+  test('a locked slider is left alone, reaction included', () => {
+    const l = lookedUp();
+    l.params.warpAmt = { base: 0.1, react: 0.5, band: 'mid', thr: 0.2, lock: true };
+    const z = zeroLook(l);
+    expect(z.params.warpAmt).toEqual(l.params.warpAmt);
+    expect(z.params.hue).toEqual(l.params.hue);
+  });
+});
+
+describe('trails in presets', () => {
+  const withTrail = (): Look => { const l = defaultLook(); l.params.trail.base = 0.6; l.params.push.base = 0.4; l.params.twist.base = -0.3; return l; };
+
+  test('Zero switches the trails off', () => {
+    const z = zeroLook(withTrail());
+    for (const id of ['trail', 'push', 'twist'] as const) expect(z.params[id].base).toBe(0);
+  });
+
+  test('Randomize all and Mutate all never switch trails on; the trails Mutate moves it', () => {
+    const rng = mulberry32(5);
+    let l = defaultLook();
+    for (let i = 0; i < 200; i++) { l = mutate(randomize(l, rng), rng); expect(l.params.trail).toEqual(defaultLook().params.trail); }
+    let g = defaultLook(), moved = false;
+    for (let i = 0; i < 20; i++) { g = mutate(g, rng, 'trails'); moved ||= g.params.trail.base > 0; }
+    expect(moved).toBe(true);
+  });
+
+  test('an old preset without the trail sliders gets them at 0', () => {
+    const old = JSON.parse(JSON.stringify([{ name: 'x', savedAt: 1, look: defaultLook() }])) as { look: { params: Record<string, unknown> } }[];
+    for (const id of ['trail', 'push', 'twist']) delete old[0].look.params[id];
+    const p = migratePresets(old)[0];
+    for (const id of ['trail', 'push', 'twist'] as const) expect(p?.look.params[id].base).toBe(0);
+  });
+});
+
 describe('crossfade', () => {
   test('endpoints are exact', () => {
     const a = lookedUp();
@@ -194,11 +277,11 @@ describe('crossfade', () => {
     const a = defaultLook();
     const b = cloneLook(a);
     b.params.warpScale.base = 8; // log 0.5…8: norm 0.5 → 1
-    b.params.zoom = { base: 1.4, react: 1, band: 'beat', thr: 0.9, lock: true };
+    b.params.zoom = { base: 3, react: 1, band: 'beat', thr: 0.9, lock: true };
     b.options.meltMode = 0;
     const m = lerpLook(a, b, 0.5);
     expect(m.params.warpScale.base).toBeCloseTo(0.5 * Math.pow(16, 0.75), 9);
-    expect(m.params.zoom.react).toBeCloseTo((0.06 + 1) / 2, 9);
+    expect(m.params.zoom.react).toBeCloseTo((paramDef('zoom').react + 1) / 2, 9);
     expect(m.params.zoom.thr).toBeCloseTo((0.15 + 0.9) / 2, 9);
     const early = lerpLook(a, b, 0.01);
     expect(early.params.zoom.band).toBe('beat');
@@ -223,12 +306,64 @@ describe('crossfade', () => {
 describe('undo', () => {
   test('restores the previous Look; ring holds 30', () => {
     const a = lookedUp();
-    let ring = pushUndo([], a);
-    const { ring: r2, look } = popUndo(ring);
-    expect(look).toBe(a);
+    let ring = pushUndo([], a, false);
+    const { ring: r2, entry } = popUndo(ring);
+    expect(entry?.look).toBe(a);
     expect(r2).toEqual([]);
-    for (let i = 0; i < 40; i++) ring = pushUndo(ring, defaultLook());
+    for (let i = 0; i < 40; i++) ring = pushUndo(ring, defaultLook(), false);
     expect(ring.length).toBe(UNDO_SIZE);
-    expect(popUndo([]).look).toBeNull();
+    expect(popUndo([]).entry).toBeNull();
+  });
+});
+
+describe('envelopes in the Look (design §5.3)', () => {
+  const shaped = (): Look => {
+    const l = defaultLook();
+    l.env.shape = { attack: 1, sustain: 0.2, decay: 4, release: 10 };
+    l.env.line = { attack: 0.5, sustain: 0.6, decay: 2, release: 3 };
+    return l;
+  };
+
+  test('crossfade: endpoints exact, midpoint linear', () => {
+    const a = defaultLook();
+    const b = shaped();
+    expect(lerpLook(a, b, 1).env).toEqual(b.env);
+    const m = lerpLook(a, b, 0.5);
+    expect(m.env.shape).toEqual({ attack: 0.5, sustain: 0.6, decay: 2.5, release: 5 });
+  });
+
+  test('cloneLook deep-copies env', () => {
+    const a = shaped();
+    const c = cloneLook(a);
+    c.env.shape.attack = 0;
+    expect(a.env.shape.attack).toBe(1);
+  });
+
+  test('randomize and mutate leave env alone', () => {
+    const a = shaped();
+    expect(randomize(a, mulberry32(1)).env).toEqual(a.env);
+    expect(mutate(a, mulberry32(1)).env).toEqual(a.env);
+  });
+
+  test('reset of a group resets that envelope only; full reset all three', () => {
+    const a = shaped();
+    const r = resetLook(a, 'line');
+    expect(r.env.line).toEqual(neutralEnv());
+    expect(r.env.shape).toEqual(a.env.shape);
+    const all = resetLook(a);
+    for (const g of ENV_GROUPS) expect(all.env[g]).toEqual(neutralEnv());
+    expect(resetLook(a, 'inner').env).toEqual(a.env);
+  });
+});
+
+describe('tagged undo (design §6.2)', () => {
+  test('entries carry the ambient flag', () => {
+    const a = defaultLook();
+    const ring = pushUndo(pushUndo([], a, false), a, true);
+    expect(ring.map((e) => e.ambient)).toEqual([false, true]);
+    const { ring: rest, entry } = popUndo(ring);
+    expect(entry).toEqual({ look: a, ambient: true, stash: null });
+    expect(rest).toHaveLength(1);
+    expect(popUndo([]).entry).toBeNull();
   });
 });

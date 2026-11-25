@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { BLANK_D, bakeMask, blankHalf, downsample2, fromHalf, signedField, toHalf } from '../src/shared/sdf';
+import { BLANK_D, bakeMask, blankHalf, downsample2, fromHalf, inkRadius, signedField, toHalf } from '../src/shared/sdf';
 
 /** R × R mask holding one disc (pixel centres within r of (cx, cy)). */
 function discMask(R: number, cx: number, cy: number, r: number): Uint8Array {
@@ -73,5 +73,23 @@ describe('bake budget (B12.4)', () => {
     const ms = performance.now() - t0;
     expect(half).toHaveLength(512 * 512);
     expect(ms).toBeLessThan(60);
+  });
+});
+
+describe('ink radius (design §4.2)', () => {
+  test('a centred disc of radius 0.5 has an ink radius of about 0.5', () => {
+    const R = 512;
+    const half = bakeMask(discMask(R, R / 2, R / 2, R / 4), R);
+    expect(Math.abs(inkRadius(half, R / 2) - 0.5)).toBeLessThan(0.015);
+  });
+
+  test('an off-centre disc reaches its far edge', () => {
+    const R = 512; // disc centre at motif (0.5, 0), radius 0.25 → far edge at 0.75
+    const half = bakeMask(discMask(R, R * 0.75, R / 2, R / 8), R);
+    expect(Math.abs(inkRadius(half, R / 2) - 0.75)).toBeLessThan(0.015);
+  });
+
+  test('a blank layer has radius 0', () => {
+    expect(inkRadius(blankHalf(64), 64)).toBe(0);
   });
 });

@@ -3,7 +3,7 @@
 
 export type Band = 'none' | 'low' | 'mid' | 'high' | 'energy' | 'beat';
 export type Scale = 'lin' | 'log' | 'wrap';
-export type Group = 'shape' | 'melt' | 'line' | 'inner' | 'colour';
+export type Group = 'shape' | 'melt' | 'line' | 'inner' | 'colour' | 'trails';
 
 export interface ParamDef {
   id: string;
@@ -20,20 +20,24 @@ export interface ParamDef {
   driftPeriod: number | null;
   /** null = never randomized */
   rand: [number, number] | null;
+  /** Scales randomize's and mutate's react amounts (default 1). Zoom's wide log range needs less. */
+  reactScale?: number;
 }
 
 const row = (
   id: string, group: Group, scale: Scale, min: number, max: number, def: number,
   band: Band, react: number, thr: number, driftAmp: number, driftPeriod: number | null,
   rand: [number, number] | null,
-): ParamDef => ({ id, group, scale, min, max, def, band, react, thr, driftAmp, driftPeriod, rand });
+  extra: { reactScale?: number } = {},
+): ParamDef => ({ id, group, scale, min, max, def, band, react, thr, driftAmp, driftPeriod, rand, ...extra });
 
 export const PARAMS = [
-  row('zoom', 'shape', 'lin', 0.5, 1.4, 0.85, 'low', 0.06, 0.15, 0.04, 120, [0.7, 1.0]),
+  row('zoom', 'shape', 'log', 0.5, 3, 0.85, 'low', 0.034, 0.15, 0.023, 120, [0.7, 1.0], { reactScale: 0.5 }),
   row('rotation', 'shape', 'lin', -0.25, 0.25, 0, 'none', 0, 0, 0.15, 240, [-0.1, 0.1]),
   row('spin', 'shape', 'lin', -6, 6, 0, 'none', 0, 0, 0, null, [-2, 2]),
-  row('tiltX', 'shape', 'lin', -0.4, 0.4, 0, 'none', 0, 0, 0.2, 90, [-0.2, 0.2]),
-  row('tiltY', 'shape', 'lin', -0.4, 0.4, 0, 'none', 0, 0, 0.2, 110, [-0.2, 0.2]),
+  row('tiltAmt', 'shape', 'lin', 0, 0.4, 0, 'none', 0, 0, 0.2, 90, [0, 0.2]),
+  row('tiltAngle', 'shape', 'wrap', 0, 1, 0, 'none', 0, 0, 0.1, 200, [0, 1]),
+  row('tiltSpeed', 'shape', 'lin', -6, 6, 0, 'none', 0, 0, 0, null, [-1, 1]),
   row('mirrorShift', 'shape', 'lin', 0, 0.6, 0, 'none', 0, 0, 0.1, 150, [0, 0.4]),
   row('warpAmt', 'shape', 'lin', 0, 0.15, 0.01, 'mid', 0.3, 0.2, 0.1, 60, [0, 0.06]),
   row('warpScale', 'shape', 'log', 0.5, 8, 2, 'none', 0, 0, 0.15, 200, [1, 5]),
@@ -60,6 +64,10 @@ export const PARAMS = [
   row('glow', 'colour', 'lin', 0, 1, 0.15, 'low', 0.3, 0.2, 0.1, 85, [0, 0.5]),
   row('glowWidth', 'colour', 'log', 0.02, 0.4, 0.12, 'none', 0, 0, 0.1, 125, [0.04, 0.3]),
   row('grain', 'colour', 'lin', 0, 0.3, 0.04, 'high', 0.3, 0.3, 0, null, [0, 0.12]),
+  // trails (design 2026-11-25 §5): `trail` is never randomized, so Randomize can't switch trails on
+  row('trail', 'trails', 'lin', 0, 1, 0, 'none', 0, 0, 0, null, null),
+  row('push', 'trails', 'lin', -1, 1, 0, 'none', 0, 0, 0, null, [-0.3, 0.3]),
+  row('twist', 'trails', 'lin', -1, 1, 0, 'none', 0, 0, 0, null, [-0.1, 0.1]),
 ] as const satisfies readonly ParamDef[];
 
 export type ParamId = (typeof PARAMS)[number]['id'];
@@ -68,7 +76,7 @@ export const PARAM_IDS: ParamId[] = PARAMS.map((p) => p.id);
 export const PARAM_INDEX: Record<ParamId, number> = Object.fromEntries(
   PARAMS.map((p, i) => [p.id, i]),
 ) as Record<ParamId, number>;
-export const GROUPS: Group[] = ['shape', 'melt', 'line', 'inner', 'colour'];
+export const GROUPS: Group[] = ['shape', 'melt', 'line', 'inner', 'colour', 'trails'];
 
 export function paramDef(id: ParamId): ParamDef {
   return PARAMS[PARAM_INDEX[id]];

@@ -50,6 +50,12 @@ export interface FrameView {
   replay: { layer: number; q: number } | null;
 }
 
+/** The unchecked shape keys stored in `ferro.pool.v1` (B12.3); empty when missing or corrupt. */
+export function storedDisabled(storage: StorageLike | null): Set<string> {
+  const saved = parseJson(safeGet(storage, STORAGE_KEYS.pool));
+  return new Set(Array.isArray(saved) ? saved.filter((k): k is string => typeof k === 'string') : []);
+}
+
 /** B12.5 safety net: live ends on its own after this long without liveStrokes. */
 export const LIVE_TIMEOUT_MS = 3000;
 /** B12.6: a replay re-bakes at most 10×/s. */
@@ -100,6 +106,7 @@ export class Library implements ShapeLookup {
   constructor(private readonly d: LibraryDeps) {
     this.persistent = d.db !== null;
     this.blank = blankHalf(d.cell);
+    this.disabled = storedDisabled(d.storage); // at once: the pool is right before IndexedDB answers
   }
 
   // ---------- boot ----------
@@ -116,9 +123,7 @@ export class Library implements ShapeLookup {
       this.drawn.set(shape.id, { shape, layer, thumb: this.d.thumb(shape.strokes) });
       this.bakeInto(shape.id, layer, shape.strokes);
     }
-    const saved = parseJson(safeGet(this.d.storage, STORAGE_KEYS.pool));
-    const keys = Array.isArray(saved) ? saved.filter((k): k is string => typeof k === 'string') : [];
-    this.disabled = new Set(keys.filter((k) => this.keyExists(k))); // drop keys of shapes that are gone
+    this.disabled = new Set([...this.disabled].filter((k) => this.keyExists(k))); // drop keys of shapes that are gone
     this.persistPool();
     this.changed();
   }

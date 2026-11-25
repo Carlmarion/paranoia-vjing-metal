@@ -1,10 +1,15 @@
 // B8 — preset slots, crossfade, randomize, mutate, reset, undo, export/import. Pure.
 import { PARAMS, fromNorm, toNorm, type Band, type Group, type ParamId } from '../shared/params';
 import {
-  PRESET_SLOTS, REACT_RANGE, THR_RANGE, defaultOptions, defaultParamState, migratePresets, serialisePresets,
+  ENV_KEYS, PRESET_SLOTS, REACT_RANGE, THR_RANGE, defaultOptions, defaultParamState, isEnvGroup, migratePresets,
+  neutralEnv, neutralEnvs, perEnvGroup, serialisePresets, type Env,
   type Look, type ParamState, type Preset,
 } from '../shared/state';
 import { clamp, clamp01, fract, gaussian, randInt, type Rng } from '../shared/math';
+import type { AmbientStash } from './ambient';
+
+/** Design §6: reactions on these bands are calmed by Ambient (kick, beat, highs). Mid and energy stay. */
+export const AMBIENT_BANDS: ReadonlySet<Band> = new Set<Band>(['low', 'beat', 'high']);
 
 export const UNDO_SIZE = 30;
 export const UNDO_FADE_S = 1;
@@ -12,7 +17,11 @@ export const UNDO_FADE_S = 1;
 export function cloneLook(l: Look): Look {
   const params = {} as Record<ParamId, ParamState>;
   for (const def of PARAMS) params[def.id] = { ...l.params[def.id] };
-  return { params, options: { ...l.options } };
+  return { v: l.v, params, options: { ...l.options }, env: cloneEnvs(l.env) };
+}
+
+function cloneEnvs(e: Look['env']): Look['env'] {
+  return perEnvGroup((g) => ({ ...e[g] }));
 }
 
 // ---------- slots ----------
@@ -104,7 +113,13 @@ export function lerpLook(a: Look, b: Look, k: number): Look {
       lock: pb.lock,
     };
   }
-  return { params, options: b.options };
+  const env = perEnvGroup((g) => {
+    const ea = a.env[g], eb = b.env[g];
+    const e = {} as Env;
+    for (const key of ENV_KEYS) e[key] = ea[key] + (eb[key] - ea[key]) * k;
+    return e;
+  });
+  return { v: b.v, params, options: b.options, env };
 }
 
 /** A crossfade from `from` towards the live target (state.look). */
@@ -132,17 +147,18 @@ const RANDOM_BANDS: Band[] = ['low', 'mid', 'high', 'beat', 'energy'];
 export const RANDOM_REACT_MAX = 0.6;
 export const RANDOM_THR_MAX = 0.5;
 
-/** B8 randomize. Options are randomized only for a full (no-group) randomize. */
-export function randomize(look: Look, rng: Rng, group?: Group): Look {
+/** B8 randomize. Options are randomized only for a full (no-group) randomize. `ambient`: no reaction on AMBIENT_BANDS. */
+export function randomize(look: Look, rng: Rng, group?: Group, ambient = false): Look {
   const out = cloneLook(look);
   for (const def of PARAMS) {
     const ps = out.params[def.id];
     if (ps.lock || !def.rand || (group && def.group !== group)) continue;
     const [lo, hi] = def.rand;
     ps.base = def.scale === 'log' ? lo * Math.pow(hi / lo, rng()) : lo + (hi - lo) * rng();
-    ps.react = rng() * RANDOM_REACT_MAX;
+    ps.react = rng() * RANDOM_REACT_MAX * (def.reactScale ?? 1);
     ps.band = rng() < 0.5 ? def.band : RANDOM_BANDS[randInt(rng, RANDOM_BANDS.length)];
     ps.thr = rng() * RANDOM_THR_MAX;
+    if (ambient && AMBIENT_BANDS.has(ps.band)) ps.react = 0;
   }
   if (!group) {
     out.options.meltMode = randInt(rng, 3) as 0 | 1 | 2;
@@ -153,15 +169,18 @@ export function randomize(look: Look, rng: Rng, group?: Group): Look {
 }
 
 export const MUTATE_SD = { base: 0.08, react: 0.1, thr: 0.05 } as const;
+/** Mutate all leaves these params alone (it would switch trails on in old Looks); the group's own Mutate moves them. */
+export const MUTATE_ALL_SKIP: readonly ParamId[] = ['trail'];
 
-/** B8 mutate: small gaussian steps around the current Look. Options unchanged. */
-export function mutate(look: Look, rng: Rng, group?: Group): Look {
+/** B8 mutate: small gaussian steps around the current Look. Options unchanged. `ambient`: calmed reactions stay 0. */
+export function mutate(look: Look, rng: Rng, group?: Group, ambient = false): Look {
   const out = cloneLook(look);
   for (const def of PARAMS) {
     const ps = out.params[def.id];
-    if (ps.lock || (group && def.group !== group)) continue;
+    if (ps.lock || (group && def.group !== group) || (!group && MUTATE_ALL_SKIP.includes(def.id))) continue;
     ps.base = fromNorm(def, clamp01(toNorm(def, ps.base) + gaussian(rng) * MUTATE_SD.base));
-    ps.react = clamp(ps.react + gaussian(rng) * MUTATE_SD.react, REACT_RANGE[0], REACT_RANGE[1]);
+    const calmed = ambient && ps.react === 0 && AMBIENT_BANDS.has(ps.band);
+    if (!calmed) ps.react = clamp(ps.react + gaussian(rng) * MUTATE_SD.react * (def.reactScale ?? 1), REACT_RANGE[0], REACT_RANGE[1]);
     ps.thr = clamp(ps.thr + gaussian(rng) * MUTATE_SD.thr, THR_RANGE[0], THR_RANGE[1]);
   }
   return out;
@@ -174,18 +193,48 @@ export function resetLook(look: Look, group?: Group): Look {
     if (group && def.group !== group) continue;
     out.params[def.id] = { ...defaultParamState(def), lock: out.params[def.id].lock };
   }
-  if (!group) out.options = defaultOptions();
+  if (!group) {
+    out.options = defaultOptions();
+    out.env = neutralEnvs();
+  } else if (isEnvGroup(group)) {
+    out.env[group] = neutralEnv();
+  }
+  return out;
+}
+
+export const ZERO_FADE_S = 1;
+
+/** The effect amounts Zero sets to 0. Colour, thickness, zoom and the melt settings stay as they are. */
+export const ZERO_BASES: readonly ParamId[] = [
+  'rotation', 'spin', 'tiltAmt', 'tiltSpeed', 'mirrorShift', 'warpAmt', 'spikeAmp', 'waveAmt', 'ripple', 'glow', 'grain',
+  'trail', 'push', 'twist',
+];
+
+/** B8 Zero: a plain, still line to build up from. No reaction, no effect amount, neutral envelopes, no hue jumps. Locked params stay. */
+export function zeroLook(look: Look): Look {
+  const out = cloneLook(look);
+  for (const def of PARAMS) {
+    const ps = out.params[def.id];
+    if (ps.lock) continue;
+    ps.react = 0;
+    if (ZERO_BASES.includes(def.id)) ps.base = 0;
+  }
+  out.env = neutralEnvs();
+  out.options.hueJumpEvery = 0;
   return out;
 }
 
 // ---------- undo ----------
 
-export function pushUndo(ring: readonly Look[], look: Look): Look[] {
-  const out = [...ring, look];
+/** Design §6.2: each entry records whether it was pushed while Ambient was on, and what Ambient owed then. */
+export interface UndoEntry { look: Look; ambient: boolean; stash: AmbientStash | null; }
+
+export function pushUndo(ring: readonly UndoEntry[], look: Look, ambient: boolean, stash: AmbientStash | null = null): UndoEntry[] {
+  const out = [...ring, { look, ambient, stash }];
   return out.length > UNDO_SIZE ? out.slice(out.length - UNDO_SIZE) : out;
 }
 
-export function popUndo(ring: readonly Look[]): { ring: Look[]; look: Look | null } {
-  if (ring.length === 0) return { ring: [], look: null };
-  return { ring: ring.slice(0, -1), look: ring[ring.length - 1] };
+export function popUndo(ring: readonly UndoEntry[]): { ring: UndoEntry[]; entry: UndoEntry | null } {
+  if (ring.length === 0) return { ring: [], entry: null };
+  return { ring: ring.slice(0, -1), entry: ring[ring.length - 1] };
 }

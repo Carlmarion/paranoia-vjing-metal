@@ -1,12 +1,15 @@
 // Display window (SPEC B11): owns all state, audio, autopilot and rendering.
 import { PARAM_INDEX } from '../shared/params';
 import { clamp, streamRng } from '../shared/math';
-import { dateSeed, getStorage } from '../shared/state';
-import { DISPLAY_MSG_TYPES, createBroadcastTransport, type DeviceInfo, type Manifest, type Msg } from '../shared/protocol';
+import { ENV_GROUPS, dateSeed, getStorage, type LookOptions, type WallWave } from '../shared/state';
+import { DISPLAY_MSG_TYPES, MAX_LAYERS, createBroadcastTransport, type DeviceInfo, type Manifest, type MetersMsg, type Msg } from '../shared/protocol';
+import { inkRadius } from '../shared/sdf';
 import { drawStrokes } from '../shared/raster';
 import type { Stroke } from '../shared/strokes';
 import { keyAction, isTyping } from '../shared/keys';
-import { Renderer } from './gl';
+import { Renderer, type CellDraw, type FrameUniforms } from './gl';
+import { trailDecay, trailMatrix } from './trails';
+import { History, WALL_HISTORY_S, cellAspect, cellDelays, cellRects, cellSteps, easeWall } from './wall';
 import { Debug } from './debug';
 import { Analyser } from './audio/analyser';
 import { idleFrame } from './audio/dsp';
@@ -14,12 +17,12 @@ import { listDevices, openInput, parseSource, type AudioInput } from './audio/in
 import {
   initialModel, patchSession, Persister, recallPreset, reduce, renderLook, tick, withDefaultPresets, type Model, type ShapeLookup,
 } from './store';
-import { Library } from './library';
+import { Library, storedDisabled } from './library';
 import { WorkerBaker } from './baker';
 import { openShapeDB } from './shapedb';
 import { Sequencer } from './sequencer';
 import { Autopilot, PRESET_CYCLE_FADE_S } from './autopilot';
-import { createModulation, modulate } from './modulation';
+import { createModulation, modulate, type Geom } from './modulation';
 
 const STATE_SEND_MS = 100; // ≤ 10×/s
 const METERS_SEND_MS = 50; // 20×/s
@@ -57,7 +60,60 @@ const bakedOnly: ShapeLookup = {
   isShape: (l) => Number.isInteger(l) && l >= 0 && l < (manifest?.count ?? 0),
   drawnLayer: () => null,
 };
-const bakedPool = (): number[] => Array.from({ length: manifest?.count ?? 0 }, (_, i) => i);
+/** Design §4.2: ink radius per texture layer, kept current on every upload. */
+const radius = new Float32Array(MAX_LAYERS);
+function measureAtlas(buf: ArrayBuffer, m: Manifest): void {
+  const n = m.cell * m.cell;
+  for (let l = 0; l < m.count && l < MAX_LAYERS; l++) radius[l] = inkRadius(new Uint16Array(buf, l * n * 2, n), m.cell);
+}
+function uploadLayer(layer: number, half: Uint16Array): void {
+  if (manifest && layer >= 0 && layer < MAX_LAYERS) radius[layer] = inkRadius(half, manifest.cell);
+  renderer?.uploadLayer(layer, half);
+}
+/** The hits counted since the last meters message; resets the counters. */
+function takeHits(): MetersMsg['envHits'] {
+  const out = { ...mod.envHits };
+  for (const g of ENV_GROUPS) mod.envHits[g] = 0;
+  return out;
+}
+/** With a wall the line is cut at the cell edge, so the zones and the stop measure against one cell. */
+function geomOf(motifA: number, motifB: number, morphT: number, cols: number, rows: number): Geom {
+  const morphing = morphT > 0 && morphT < 1;
+  return {
+    radius: morphing ? Math.max(radius[motifA] ?? 0, radius[motifB] ?? 0) : radius[motifA] ?? 0,
+    ...cellAspect(canvas.width, canvas.height, cols, rows), morphing,
+  };
+}
+
+/** The wall (design 2026-11-25 §6): past frame inputs, and the wave's steps for the current size and pattern. */
+const wallHistory = new History<FrameUniforms>(WALL_HISTORY_S);
+let wallSteps: { key: string; steps: number[] } = { key: '', steps: [0] };
+let wallClock = 0;
+function stepsFor(cols: number, rows: number, wave: WallWave): number[] {
+  const key = `${cols}x${rows}:${wave}`;
+  if (wallSteps.key !== key) wallSteps = { key, steps: cellSteps(cols, rows, wave, seed) };
+  return wallSteps.steps;
+}
+/** One draw per cell: the first-step cells show `now`, the others what was on screen `delay` seconds ago. */
+let wallSize: { cols: number; rows: number } | null = null;
+function wallCells(now: FrameUniforms, o: LookOptions, dt: number, snap: boolean): CellDraw[] {
+  // a change of size glides (the cells shrink and new ones slide in from the right and the bottom); Fallback is instant
+  wallSize = wallSize && !snap
+    ? { cols: easeWall(wallSize.cols, o.wallCols, dt), rows: easeWall(wallSize.rows, o.wallRows, dt) }
+    : { cols: o.wallCols, rows: o.wallRows };
+  const rects = cellRects(canvas.width, canvas.height, wallSize.cols, wallSize.rows);
+  const cols = Math.ceil(wallSize.cols), rows = Math.ceil(wallSize.rows);
+  if (cols * rows === 1) { wallHistory.clear(); return [{ rect: rects[0], u: now }]; }
+  wallClock += dt;
+  wallHistory.push(wallClock, { ...now, params: new Float32Array(now.params), tilt: [now.tilt[0], now.tilt[1]] });
+  const delays = cellDelays(stepsFor(cols, rows, o.wallWave), o.wallDelay);
+  return rects.map((rect, i) => ({ rect, u: delays[i] > 0 ? wallHistory.at(wallClock - delays[i]) ?? now : now }));
+}
+/** Before the library is up: the baked shapes, minus the ones unchecked in storage. */
+const bakedPool = (): number[] => {
+  const off = storedDisabled(storage);
+  return Array.from({ length: manifest?.count ?? 0 }, (_, i) => i).filter((i) => !off.has(`baked:${i}`));
+};
 let fatal: string | null = null;
 let audioError: string | null = null;
 
@@ -132,7 +188,10 @@ function apply(msg: unknown): void {
   const r = reduce(model, msg, { rng: presetsRng, nowMs: Date.now(), shapes: library ?? bakedOnly });
   model = r.model;
   for (const e of r.effects) {
-    if (e.t === 'seq') seq.command(e.cmd);
+    if (e.t === 'seq') {
+      if (e.cmd.name === 'replay' && e.cmd.fromBlank) blankReplay = true; // B7.6: the drawing appears on black, with no old echo
+      seq.command(e.cmd);
+    }
     else if (e.t === 'seqForget') seq.forget(e.layer);
     else if (e.t === 'library') library?.handle(e.msg);
     else if (e.t === 'sendState') { sendState(); if (library) transport.send(library.meta()); }
@@ -167,7 +226,7 @@ async function startLibrary(m: Manifest): Promise<void> {
     bakedNames: m.motifs.map((x) => x.file.replace(/\.png$/i, '')),
     db: await openShapeDB(),
     bake: { library: new WorkerBaker(m.cell), live: new WorkerBaker(m.cell) },
-    upload: (layer, half) => renderer?.uploadLayer(layer, half),
+    upload: uploadLayer,
     thumb: renderThumb,
     storage,
     send: (msg) => transport.send(msg),
@@ -236,6 +295,11 @@ const autopilot = new Autopilot(seed);
 const mod = createModulation();
 let lastLinger = 0.5;
 let master = 1;
+/** Empty the scene buffers before the next draw (design 2026-11-25 §4.2). */
+let wipe = false;
+let wasFallback = false;
+/** A replay from blackout is waiting for the sequencer (it finishes a running melt first): keep the buffers empty until it starts. */
+let blankReplay = false;
 let frameNo = 0;
 let lastMs = performance.now();
 const startMs = lastMs;
@@ -266,28 +330,42 @@ function frame(nowMs: number): void {
   if (ap.recall !== null) model = recallPreset(model, ap.recall, PRESET_CYCLE_FADE_S);
   const look = renderLook(model);
   const session = model.state.session;
-  modulate(mod, look, session, audio, ap.driftT, dt);
-  lastLinger = mod.values[PARAM_INDEX.linger];
-
-  const target = session.blackout ? 0 : 1;
-  master = clamp(master + Math.sign(target - master) * (dt / BLACKOUT_FADE_S), 0, 1);
-
   const fb = session.fallback;
   const motifA = fb ? 0 : so.motifA;
   const motifB = fb ? 0 : so.motifB;
   const morphT = fb ? 0 : so.morphT;
 
   resize();
+  modulate(mod, look, session, audio, ap.driftT, dt, geomOf(motifA, motifB, morphT, look.options.wallCols, look.options.wallRows));
+  lastLinger = mod.values[PARAM_INDEX.linger];
+
+  const target = session.blackout ? 0 : 1;
+  master = clamp(master + Math.sign(target - master) * (dt / BLACKOUT_FADE_S), 0, 1);
+
+  // no echo survives a full blackout or a change of Fallback
+  if (master === 0 || fb !== wasFallback || blankReplay) wipe = true;
+  if (seq.pending?.name !== 'replay') blankReplay = false; // started (or refused): this frame's wipe is the last
+  wasFallback = fb;
+
   if (renderer) {
-    renderer.draw({
-      params: mod.values, res: [canvas.width, canvas.height],
+    renderer.resize(canvas.width, canvas.height);
+    if (wipe) { renderer.clear(); wallHistory.clear(); }
+    const now: FrameUniforms = {
+      params: mod.values,
       motifA, motifB, morphT,
       meltMode: look.options.meltMode, mirrorX: look.options.mirrorX, mirrorY: look.options.mirrorY,
-      warpPhase: mod.warpPhase, spikePhase: mod.spikePhase, wavePhase: mod.wavePhase, spinPhase: mod.spinPhase,
-      hueOffset: fb ? 0 : ap.hueOffset, master, frame: frameNo++,
-    });
+      warpPhase: mod.warpPhase, spikePhase: mod.spikePhase, wavePhase: mod.wavePhase, spinPhase: mod.spinPhase, tilt: mod.tilt,
+      hueOffset: fb ? 0 : ap.hueOffset,
+    };
+    const v = mod.values;
+    renderer.draw(
+      wallCells(now, look.options, dt, fb),
+      { decay: fb ? 0 : trailDecay(v[PARAM_INDEX.trail], dt), m: trailMatrix(v[PARAM_INDEX.push], v[PARAM_INDEX.twist], dt) },
+      { master, frame: frameNo++, grain: v[PARAM_INDEX.grain] },
+    );
   }
-  persister.update(model.state, nowMs);
+  wipe = false;
+  persister.update(model.state, nowMs, model.ambientStash);
 
   const error = fatal ?? renderer?.error ?? audioError ?? (renderer ? null : 'WebGL context lost');
   if (model.state !== lastSentState && nowMs - lastStateSendMs >= STATE_SEND_MS) sendState();
@@ -295,7 +373,7 @@ function frame(nowMs: number): void {
     lastMetersMs = nowMs;
     transport.send({
       t: 'meters', audio, values: Array.from(mod.norm), motifA, motifB, morphT,
-      holdRemaining: so.holdRemaining, fps, ...(error ? { error } : {}),
+      holdRemaining: so.holdRemaining, fps, zones: mod.zones, envHits: takeHits(), hueOffset: fb ? 0 : ap.hueOffset, ...(error ? { error } : {}),
     });
   }
   debug.update(dt, {
@@ -311,7 +389,7 @@ async function boot(): Promise<void> {
   model = b.model;
   seq = new Sequencer(seed, model.state.look.options.holdBeats);
   booted = true;
-  persister.update(model.state, performance.now());
+  persister.update(model.state, performance.now(), model.ambientStash);
   if (b.needDefaultPresets) {
     try { model = withDefaultPresets(model, await fetchJson('presets/default.json')); } catch (e) { console.warn(e); }
   }
@@ -323,6 +401,7 @@ async function boot(): Promise<void> {
       const res = await fetch(assetUrl('sdf/atlas.bin'));
       if (!res.ok) throw new Error(`sdf/atlas.bin: HTTP ${res.status}`);
       atlas = await res.arrayBuffer();
+      measureAtlas(atlas, manifest);
       initRenderer();
       void startLibrary(manifest).catch((e: unknown) => { console.error('library', e); });
     } catch (e) {

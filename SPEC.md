@@ -27,8 +27,8 @@ They talk over `BroadcastChannel('ferro')` (same origin, same Chrome profile, no
 ## A3. Hard constraints
 
 - Zero runtime dependencies. Raw WebGL2, Web Audio, DOM. No three.js, no UI library.
-- One fragment shader, one pass, exactly 2 texture samples per pixel. No raymarching, no 3D, no bevel lighting.
-- 60 fps at 1920×1080 on integrated graphics.
+- One scene shader with exactly 2 SDF samples per pixel (plus one read of the last frame while trails are on), drawn into an off-screen buffer, and one show pass (B5.1). No raymarching, no 3D, no bevel lighting.
+- 60 fps at 1920×1080 on integrated graphics, trails and wall included. If the largest wall can't hold it, lower `WALL_MAX`; the render scale is not touched.
 - No network at runtime.
 - Chrome only (latest stable).
 - Flash safety: by default, no full-screen luminance or hue jump more often than 3 times per second (see B6.3, B6.4 and B7.5). `calib.refractoryMs` can go below the cap; that is Carl's call during testing.
@@ -165,6 +165,7 @@ interface ParamState { base: number; react: number; band: Band; thr: number; loc
 
 // A Look is what a preset stores.
 interface Look {
+  v: 2;                           // format version; a Look without v (or v < 2) is v1 and is converted on load (B4.2)
   params: Record<ParamId, ParamState>;
   options: {
     meltMode: 0 | 1 | 2;          // 0 blend, 1 fuse, 2 spatial
@@ -173,12 +174,24 @@ interface Look {
     hueJumpAmt: number;           // 0…0.5 turns
     holdBeats: 0 | 16 | 32 | 64 | 128;  // 0 = flow: always melting
     morphBeats: 4 | 8 | 16 | 32 | 64;
+    wallCols: number; wallRows: number;  // 1…8 (WALL_MAX); 1×1 = no wall (B5.2)
+    wallWave: 0 | 1 | 2 | 3 | 4;         // rows, snake, centre, diagonal, random
+    wallDelay: number;                   // 0…1 s between one wave step and the next
   };
+  env: Record<'shape' | 'line' | 'colour', Env>;   // reaction envelope per group (B4.5); missing → neutral
+}
+
+// B4.5. Neutral { attack: 0, sustain: 1, decay: 1, release: 0 } returns its input exactly.
+interface Env {
+  attack: number;   // 0…2 s, time constant of the rise
+  sustain: number;  // 0…1, level the effect sags to while the sound continues (1 = no fatigue)
+  decay: number;    // 0.05…10 s, how fast it sags (and recovers)
+  release: number;  // 0…20 s, time constant of the tail
 }
 
 // Session: live performance state. Never stored in presets.
 interface Session {
-  autopilot: number;      // 0…1, default 0.5
+  autopilot: number;      // 0…1, default 0 (drift off until raised by hand)
   reactMaster: number;    // 0…2, default 1
   xfade: number;          // seconds, 0…8, default 3
   autoAdvance: boolean;   // default true
@@ -188,6 +201,8 @@ interface Session {
   meltHold: boolean; holdPos: number;   // manual melt scrub, 0…1
   queued: number | null;                // motif queued as next
   live: boolean;                        // the live layer is on the projector (B12.5); never persisted
+  zoomStop: boolean;                    // B4.4 stop; default true
+  ambient: boolean;                     // B8.1 Ambient mode; only the `ambient` command sets it
 }
 
 // Shapes (B12). Coordinates are motif units: the square canvas spans −1…+1, y up, like the shader.
@@ -241,6 +256,8 @@ value  = fromNorm(scale == 'wrap' ? fract(u) : clamp01(u))
 - `lock` excludes a param from drift, randomize and mutate.
 - A `—` in the driftPeriod column means the param has no drift (its driftAmp is 0).
 - `bandValue` for `beat` is the beat pulse (B6.4); for `energy` it is `energy30`.
+- For the **shape**, **line** and **colour** groups, `gate` is replaced by the output `y` of that group's envelope (B4.5): `u = u_base + drift + reactMaster × react × y`. Melt and inner use `gate` directly.
+- After all params are computed, the **stop** (B4.4) may hold `zoom` and `mirrorShift` back.
 
 ### B4.2 The table
 
@@ -248,11 +265,12 @@ Units: motif space, the cell is −1…+1. A typical stroke half-width is 0.02�
 
 | id | group | scale | min | max | default | band | react | thr | driftAmp | driftPeriod s | rand range |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| zoom | shape | lin | 0.5 | 1.4 | 0.85 | low | 0.06 | 0.15 | 0.04 | 120 | 0.7–1.0 |
+| zoom | shape | log | 0.5 | 3 | 0.85 | low | 0.034 | 0.15 | 0.023 | 120 | 0.7–1.0 |
 | rotation | shape | lin | −0.25 | 0.25 | 0 | none | 0 | 0 | 0.15 | 240 | −0.1–0.1 |
 | spin | shape | lin | −6 | 6 | 0 | none | 0 | 0 | 0 | — | −2–2 |
-| tiltX | shape | lin | −0.4 | 0.4 | 0 | none | 0 | 0 | 0.2 | 90 | −0.2–0.2 |
-| tiltY | shape | lin | −0.4 | 0.4 | 0 | none | 0 | 0 | 0.2 | 110 | −0.2–0.2 |
+| tiltAmt | shape | lin | 0 | 0.4 | 0 | none | 0 | 0 | 0.2 | 90 | 0–0.2 |
+| tiltAngle | shape | wrap | 0 | 1 | 0 | none | 0 | 0 | 0.1 | 200 | 0–1 |
+| tiltSpeed | shape | lin | −6 | 6 | 0 | none | 0 | 0 | 0 | — | −1–1 |
 | mirrorShift | shape | lin | 0 | 0.6 | 0 | none | 0 | 0 | 0.1 | 150 | 0–0.4 |
 | warpAmt | shape | lin | 0 | 0.15 | 0.01 | mid | 0.3 | 0.2 | 0.1 | 60 | 0–0.06 |
 | warpScale | shape | log | 0.5 | 8 | 2 | none | 0 | 0 | 0.15 | 200 | 1–5 |
@@ -279,35 +297,84 @@ Units: motif space, the cell is −1…+1. A typical stroke half-width is 0.02�
 | glow | colour | lin | 0 | 1 | 0.15 | low | 0.3 | 0.2 | 0.1 | 85 | 0–0.5 |
 | glowWidth | colour | log | 0.02 | 0.4 | 0.12 | none | 0 | 0 | 0.1 | 125 | 0.04–0.3 |
 | grain | colour | lin | 0 | 0.3 | 0.04 | high | 0.3 | 0.3 | 0 | — | 0–0.12 |
+| trail | trails | lin | 0 | 1 | 0 | none | 0 | 0 | 0 | — | — |
+| push | trails | lin | −1 | 1 | 0 | none | 0 | 0 | 0 | — | −0.3–0.3 |
+| twist | trails | lin | −1 | 1 | 0 | none | 0 | 0 | 0 | — | −0.1–0.1 |
 
-31 params → `uniform float uP[31];`. `params.ts` exports the GLSL header (`#define P_ZOOM uP[0]`, `#define P_ROTATION uP[1]` …, one line per row, names upper-cased) that `gl.ts` inserts after the `#version` line of the fragment source. GLSL ES has no `##` token pasting, so each name is its own macro.
+**Zoom (v2).** Zoom is `log` 0.5…3, so it can fill the window. A row may carry `reactScale` (zoom: 0.5): randomize and mutate scale their react amounts by it (B8). `react` and `driftAmp` are normalised, so a v1 Look (lin 0.5…1.4) is converted on load: when it stores a numeric zoom react, `push = react × 0.9`, `react = sign(push) × |ln(max(base + push, 0.05) / base)| / ln 6`, clamped to −1…1, which keeps the same push at that base. A v1 zoom without a stored react takes the default.
+
+**Trails.** The `trails` group has no envelope. `trail` is never randomized and Mutate all skips it (B8), so neither can switch trails on. Old Looks have no entry for these ids and get the defaults (off).
+
+35 params → `uniform float uP[35];`. `params.ts` exports the GLSL header (`#define P_ZOOM uP[0]`, `#define P_ROTATION uP[1]` …, one line per row, names upper-cased) that `gl.ts` inserts after the `#version` line of the fragment source. GLSL ES has no `##` token pasting, so each name is its own macro.
 
 `waveFreq` is in cycles per motif unit. At 1080p the Nyquist limit is about 230, so values above that alias on purpose: this is the moiré effect.
 
 ### B4.3 Phases
 A speed param that changes over time must not be multiplied by time (it jumps). `modulation.ts` integrates four phases each frame and uploads them: `uWarpPhase += warpSpeed × dt`, `uSpikePhase += spikeSpeed × dt`, `uWavePhase += waveSpeed × dt`. `uWavePhase` wraps at 1000 (it feeds a sine, so the wrap is invisible). The warp and spike phases are noise coordinates and are never wrapped: a wrap would make the shape jump. The shader's `hash` is an integer hash of the cell index, exact up to 2^24 cells, so noise stays clean for days of running. `uSpinPhase` is in turns, kept in 0…1. It advances by `spin / 60 × dt`, where `spin` is the effective value in turns per minute: band and react make the motif turn with the music, and with `base` 0 it stays where the sound left it. While spin is fully off (`base` 0 and `react` 0) it glides back to the nearest whole turn with a time constant of 0.4 s and snaps to exactly 0 within 1e-4, so the motif returns upright without a jump.
 
+**Wobble tilt.** The lean is `tiltAmt` (how far, the one to drive with sound) along the direction `tiltAngle` (turns: 0 = right, 0.25 = up) plus a phase `uTiltPhase` that advances at `tiltSpeed` turns per minute (like spin, B4.3; it never glides back). `modulation.ts` sends the shader `uTilt = tiltAmt × (cos 2π(angle + phase), sin 2π(angle + phase))`. With speed 0 it is a fixed lean in any direction; with a slow speed each kick leans toward a different side. Old Looks with `tiltX` / `tiltY` are converted on load to the same lean: amount = length, angle = direction; a reaction carries over to the amount (×2, the new span is half the old), band and threshold from the axis with the larger reaction, and with no base lean the reaction's direction gives the angle.
+
+### B4.4 Reach, zones and the stop (`reach.ts`)
+
+With a wall (B5.2) the line is cut at the cell edge, so "the window" below means **one cell**: `ax` and `ay` are the cell's half-extents in units of its short side (`wall.ts` `cellAspect`). At 1×1 that is the window.
+
+**Ink radius.** For every texture layer the Display keeps the largest distance from the cell centre, in motif units, of any texel with SDF ≤ 0 (`sdf.ts` `inkRadius`; a blank layer → 0). Baked layers are measured from `atlas.bin` at load, and every upload (drawn shapes, re-bakes, the live layer, replays) measures again. The radius used for a frame is `radius[A]`, or `max(radius[A], radius[B])` during a melt; layer 0 in fallback.
+
+**Fill.** In screen units (the window's short side spans −1…+1), with window half-extents `ax = w / min(w, h)`, `ay = h / min(w, h)`:
+```
+grow   = max(thickness, 0) + spikeAmp + warpAmt × √2 + (fuse melt running ? meltK / 4 : 0)
+Rink   = R + grow                                   (0 when R = 0)
+Rglow  = Rink + (glow × brightness > 0.08 ? glowWidth × ln(glow × brightness / 0.08) : 0)
+for Rx in (Rink, Rglow):
+  ρ = zoom × Rx;  ex = ρ + (mirrorX ? mirrorShift : 0);  ey = ρ + (mirrorY ? mirrorShift : 0)
+  k = 1 / max(1 − |tiltX| × ex − |tiltY| × ey, 0.05)
+  fill = max(ex × k / ax, ey × k / ay)
+```
+`fillInk ≥ 1`: the line touches the window edge (**red**). `fillGlow ≥ 1`: the glow does (**orange**). Rotation and spin do not enter: a radius is the same at every angle, so this errs on the safe side. A zero-size or invalid window gives fill 0. `limit(param, kind)` is the value of `zoom` or `mirrorShift` where `fill[kind] = 1` (bisection, 24 steps); the range max when never reached, the min when always exceeded.
+
+**Stop** (`session.zoomStop`, default on, not in fallback). For `x` in zoom and mirrorShift, with `x_hand = base` and `x_full` the B4.1 value: `x_final = x_full ≤ x_hand ? x_full : max(x_hand, min(x_full, x_limit))`, with the ink limit. Order: mirrorShift first (only with a mirror on; zoom at its hand value), then zoom (with the final mirrorShift). Sound and drift can move outward only up to the red line, never below the hand; inward motion is free. Other effects (a thickness kick, tilt drift) can still nudge a line already at the edge over it. With the stop off, values are exactly B4.1.
+
+**Zones.** Each frame the Display computes, with the other params at rest (base + drift, no sound), the normalised slider positions where orange and red start on zoom and mirrorShift (1 = never; mirrorShift `[1, 1]` without a mirror), and sends them in `meters.zones` (B9).
+
+### B4.5 Reaction envelope (`shared/envelope.ts`)
+
+Per param in the shape, line and colour groups, a charge `c` (starts 1) and an output `y` (starts 0); the settings are the group's `look.env[group]`. Each frame, with `g` the gate value:
+```
+x      = g × c                                   // the charge before draining: a hit's first frame is full at any frame rate
+target = 1 − (1 − sustain) × g
+τc     = target < c ? decay : max(decay, release)   // refilling takes at least as long as the tail
+c     += (target − c) × (1 − exp(−dt / τc))
+τ      = x > y ? attack : release
+y      = τ ≤ 0 ? x : y + (x − y) × (1 − exp(−dt / τ))
+```
+A sustained sound gives a sharp start, a sag to `sustain`, and a tail of `release`. Repeat hits inside the tail land weaker, because the charge has not refilled (fatigue). A sag falls at the `release` speed. Neutral settings give `y = g` exactly.
+
+**Hits.** Per group, the strongest gate among its params with `react ≠ 0` and a band counts one **hit** when it rises above 0.15 after having fallen below 0.05 (a held sound is one hit; wobbling around the threshold is not counted twice). The Display sends the hits since its previous meters message in `meters.envHits`.
+
 ## B5. Shader (`shader.frag`, `#version 300 es`)
 
 ```glsl
 precision highp float; precision highp sampler2DArray;
 uniform sampler2DArray uSdf;
-uniform float uP[31];
-uniform vec2  uRes;
+uniform sampler2D uPrev;                      // last frame's scene buffer (B5.1)
+uniform float uP[35];
+uniform vec2  uRes, uOrigin, uScreen;         // this cell's size and lower-left pixel; the whole buffer's size
+uniform mat2  uTrailM; uniform float uTrailDecay, uFloor;   // trails (B5.1)
 uniform float uMotifA, uMotifB, uMorphT;      // layer indices, eased morph 0…1
 uniform int   uMeltMode; uniform bool uMirrorX, uMirrorY;
-uniform float uWarpPhase, uSpikePhase, uWavePhase, uSpinPhase, uHueOffset, uMaster, uFrame;
+uniform vec2  uTilt;
+uniform float uWarpPhase, uSpikePhase, uWavePhase, uSpinPhase, uHueOffset;
 ```
 
 Pipeline, in this order:
 
 ```glsl
-// 1. Screen space: short side spans −1…+1
-vec2 s = (gl_FragCoord.xy - 0.5 * uRes) / (0.5 * min(uRes.x, uRes.y));
+// 1. Screen space: the cell's short side spans −1…+1
+vec2 s = (gl_FragCoord.xy - uOrigin - 0.5 * uRes) / (0.5 * min(uRes.x, uRes.y));
 vec2 p = s;
 
 // 2. Tilt (perspective skew), mirror, rotate (+ spin), zoom
-p /= max(1.0 + P_TILTX * p.x + P_TILTY * p.y, 0.25);
+p /= max(1.0 + dot(uTilt, p), 0.25);         // uTilt: the wobble lean (B4.3)
 if (uMirrorX) p.x = abs(p.x) - P_MIRRORSHIFT;
 if (uMirrorY) p.y = abs(p.y) - P_MIRRORSHIFT;
 p = rot((P_ROTATION + uSpinPhase) * TAU) * p / P_ZOOM;
@@ -357,16 +424,47 @@ vec3 rgb = hsv2rgb(vec3(fract(h), P_SAT, 1.0));
 float lum = mask * inner + (1.0 - mask) * g;
 vec3 col = rgb * lum * P_BRIGHTNESS;
 
-// 11. Grain (keeps the background black), master fade
-col += (hash(gl_FragCoord.xy + uFrame) - 0.5) * P_GRAIN * (0.15 + lum);
-fragColor = vec4(clamp(col, 0.0, 1.0) * uMaster, 1.0);
+// 11. Trails: the last frame, moved and faded (B5.1). Grain and master are in show.frag.
+vec4 echo = vec4(0.0);
+if (uTrailDecay > 0.0) {
+  float hs = 0.5 * min(uScreen.x, uScreen.y);
+  vec2 uv = (uTrailM * ((gl_FragCoord.xy - 0.5 * uScreen) / hs) * hs + 0.5 * uScreen) / uScreen;
+  if (uv == clamp(uv, 0.0, 1.0)) echo = max(min(texture(uPrev, uv), 1.0) * uTrailDecay - uFloor, 0.0);   // black outside the window; capped at 1
+}
+fragColor = max(vec4(col, lum), echo);
 ```
 
 Notes:
+- **Colour in plain words** (step 10): `hue` is the colour of the line's edge; `hueDepth` turns the colour across the line, from the glow (`hue − 0.2 × hueDepth`) to the core (deeper inside the line is further round the wheel, so a thicker line, e.g. on a thickness kick, pushes the core colour further); `hueSpace` turns the colour with the distance from the screen centre (half a turn at the edge of the square at 1). Hue jumps (`uHueOffset`) turn everything together. The dashboard's colour strip (B10) shows these as two handles and a live bracket.
 - Noise is hash-based, no textures: an integer (`uint`) hash of `floor(p)`. `vnoise` and `fbm` return 0…1.
 - Draw one fullscreen triangle. Canvas size = CSS size × `min(devicePixelRatio, 1)` × `?scale=` (default 1).
 - On shader compile or link failure: keep the previous program, show the error in the debug overlay, and send it to the Control window. Never show a blank screen.
-- `uMaster` fades 1 → 0 over 1 s on blackout, and back.
+- `uMaster` fades 1 → 0 over 1 s on blackout, and back (show pass).
+
+### B5.1 Passes, buffers and trails (`gl.ts`, `show.frag`, `trails.ts`)
+
+1. **Scene pass.** `shader.frag` draws into the off-screen buffer `cur`, once per cell (B5.2), reading the previous buffer `prev` for the echoes.
+2. **Show pass.** `show.frag` copies `cur` to the canvas: `clamp(buf.rgb + noise × grain × (0.15 + buf.a), 0, 1) × uMaster`, with the same hash and per-frame offset `(127, 311) × frame` as before. Grain and master live here so grain never piles up in the echoes and a blackout stays clean.
+3. `cur` and `prev` swap.
+
+- **Buffers:** two textures the size of the canvas, `RGBA16F` (needs `EXT_color_buffer_float`), linear, clamp to edge. RGB = the picture before grain and master (not clamped), alpha = `lum`. Without the extension: `RGBA8` and `uFloor = 1/255` per frame, so echoes still reach black (their longest life is then about 255 frames, whatever `trail` says). The echo read from `prev` is capped at 1, so a flash brighter than white starts fading at once.
+- **Allocated again and black** on resize, on context restore and on the first frame.
+- **Emptied, with the wall history:** on every frame while the master is 0; from the moment a replay from blackout is asked for until the sequencer starts it (it finishes a running melt first, B7.6); on the frame Fallback turns on or off.
+- **Trails** (`trails.ts`, pure, per second so the look does not depend on the frame rate): `τ = TRAIL_MAX_S × trail²` (`TRAIL_MAX_S = 6` s), `uTrailDecay = τ > 0 ? exp(−dt/τ) : 0`. Each frame the echoes grow by `exp(push × PUSH_RATE × dt)` (`PUSH_RATE = 1.5`/s) and turn by `twist × TWIST_RATE × dt` turns (`TWIST_RATE = 0.25`), about the window centre; `uTrailM` is the inverse. Combine is `max` per channel, so colours stay pure. The trail values are the current ones for the whole window, also with a wall.
+- With `trail` 0 and a 1×1 wall the picture is the one the single pass drew.
+- **Fallback:** `uTrailDecay = 0` and a 1×1 wall, whatever the Look says.
+
+### B5.2 The wall (`wall.ts`)
+
+`wallCols × wallRows` cells (1…`WALL_MAX` = 8 each). Every cell shows the same picture at a different moment.
+
+- **Cells:** edges at `floor(i × W / cols)` and `floor(j × H / rows)`; the shape is sized to the cell's short side; tilt, mirrors, zoom and `hueSpace` are per cell. Glow or line reaching a cell edge is cut there.
+- **Changing size** glides (`easeWall`, time constant `WALL_EASE_S = 0.25` s): the size on screen is fractional on the way, with `ceil(cols) × ceil(rows)` cells of `W/cols × H/rows` anchored top-left, so the cells shrink and new ones slide in from the right and the bottom (or slide out). Steps follow the cell count on screen. Fallback is instant.
+- **Steps** (row 0 = top, column 0 = left): rows `row × cols + col` · snake (odd rows right to left) · centre `floor(max(|col − (cols−1)/2|, |row − (rows−1)/2|))` · diagonal `col + row` · random (a shuffle fixed per seed and size, on its own PRNG stream `wall`).
+- **Delay** of a cell = `step × wallDelay`; when the largest would pass `WALL_HISTORY_S = 6` s, all delays are scaled down so the last cell is 6 s late.
+- **History:** while the wall is larger than 1×1 the Display keeps the last 6 s of frame inputs (param values, phases, tilt, hue offset, both layers, `uMorphT`, melt mode, mirrors). A cell is drawn with the newest snapshot at least its delay old (the oldest one when history is shorter). So reactions and the melt cross the wall as a wave.
+- **Not delayed:** the trail values, grain and master, the meters and everything the dashboard shows, the sequencer, and the contents of the layers: live drawing appears in all cells at once.
+- **The wall belongs to the moment, not to the preset:** a recall (by hand or by the cycle) keeps the four wall options that are on screen, whatever the preset stored. Randomize and Zero leave the wall alone; Reset all removes it.
 
 ## B6. Audio (`src/display/audio/`)
 
@@ -416,6 +514,7 @@ Everything counts in beats. A real onset is one beat. When `silent`, or no onset
 - **HOLD(A):** `remaining = holdBeats`, minus 1 per beat. At 0 (if `autoAdvance` and not `frozen` and not `meltHold`) → MORPH. With `holdBeats` 0 (flow) the next morph starts on the frame after landing, so the motifs melt continuously; each motif is reached for an instant, where the eased curve slows to zero speed.
 - **MORPH(A → B):** `progress += dt / (morphBeats × beatPeriod)`, with `beatPeriod` sampled when the morph starts. At 1 → A = B, HOLD.
 - Target choice: `queued` if set; else `random` (seeded, never one of the last 3 shown; relax to "not the current" when the pool has ≤ 4 shapes) or `sequential` (library order). Both choose from the **pool**: the layers of the enabled shapes (B12.3), in library order. A shape unchecked while it is A stays on screen until the next morph. With an empty pool no morph starts; with a pool of one shape and A outside it, the morph goes there once.
+- **Start:** the sequencer starts on layer 0; on its first frame, if layer 0 is not in the pool and the pool is not empty, it starts on the first pooled shape instead (nothing is on screen yet, so nothing pops).
 - Eased value sent to the shader:
 ```
 S(x)    = x² (3 − 2x)
@@ -452,14 +551,25 @@ The live layer (`LIVE = MAX_LAYERS − 1`) is a motif like any other for the sha
 
 - **16 slots.** `save(slot?)` writes the current Look to the given slot, or the first empty one, named `HH:MM:SS`. `rename`, `delete`.
 - **Recall** crossfades over `session.xfade` seconds: `base`, `react` and `thr` interpolate in normalised space (hue takes the shortest way round); `band`, `lock` and all `options` switch at the start.
-- **Default Look options:** `meltMode` 1 (fuse), `mirrorX` false, `mirrorY` false, `hueJumpEvery` 0, `hueJumpAmt` 0.25, `holdBeats` 32, `morphBeats` 16.
-- **Randomize(group?)** for every unlocked param (optionally only one group): `base` uniform in the rand range (log-uniform for log params); `react` uniform in 0…0.6, sign positive; `band` = table default with probability 0.5, else uniform among low, mid, high, beat, energy; `thr` uniform in 0…0.5. Options: `meltMode` uniform; `mirrorX`, `mirrorY` true with probability 0.25 each. Never touches `brightness`, `holdBeats`, `morphBeats`, `hueJumpEvery`.
-- **Mutate:** for every unlocked param, `base_norm += N(0, 0.08)`, `react += N(0, 0.1)`, `thr += N(0, 0.05)`, all clamped. Options unchanged. This is the tool for walking around a sweet spot.
-- **Reset(group?)**: back to table defaults.
+- **Default Look options:** `meltMode` 1 (fuse), `mirrorX` false, `mirrorY` false, `hueJumpEvery` 0, `hueJumpAmt` 0.25, `holdBeats` 32, `morphBeats` 16, `wallCols` 1, `wallRows` 1, `wallWave` 0, `wallDelay` 0.12.
+- **Randomize(group?)** for every unlocked param (optionally only one group): `base` uniform in the rand range (log-uniform for log params); `react` uniform in 0…0.6 × `reactScale`, sign positive; `band` = table default with probability 0.5, else uniform among low, mid, high, beat, energy; `thr` uniform in 0…0.5. Options: `meltMode` uniform; `mirrorX`, `mirrorY` true with probability 0.25 each. Never touches `brightness`, `holdBeats`, `morphBeats`, `hueJumpEvery`.
+- **Mutate:** for every unlocked param, `base_norm += N(0, 0.08)`, `react += N(0, 0.1 × reactScale)`, `thr += N(0, 0.05)`, all clamped. Options unchanged. This is the tool for walking around a sweet spot.
+- **Zero** (key `0`): a plain, still line to build a look up from. Every `react` → 0; the bases of `rotation`, `spin`, `tiltAmt`, `tiltSpeed`, `mirrorShift`, `warpAmt`, `spikeAmp`, `waveAmt`, `ripple`, `glow`, `grain`, `trail`, `push`, `twist` → 0; all envelopes neutral; `hueJumpEvery` → 0; `session.autopilot` → 0 and `session.presetCycleMin` → 0 (a cycle recall would overwrite the look being built). Colour, thickness, zoom, brightness, the melt settings, the other options and locked params stay. Crossfades over 1 s. Undo restores the Look (not the autopilot or the preset cycle). While Ambient is on it is a whole new Look: nothing stays owed.
+- **Mutate all** leaves `trail` alone (base, react and thr); the trails group's own Mutate moves it.
+- **Reset(group?)**: back to table defaults. Reset of shape, line or colour also sets that group's envelope to neutral; Reset all sets all three.
+- **Envelopes** are part of the Look: recall crossfades their four numbers linearly; randomize and mutate never touch them.
 - **Undo:** ring of 30 Looks, pushed before randomize, mutate, reset and recall. Undo crossfades over 1 s.
 - Randomize and mutate also crossfade over `session.xfade`.
 - **Export** downloads `ferro-presets-YYYYMMDD-HHMM.json`. **Import** validates and merges into empty slots.
 - All randomness uses the seeded PRNG.
+
+### B8.1 Ambient mode (`ambient.ts`)
+
+For when the music turns ambient: one press calms everything driven by the kick, the beat or the highs, and a second press gives it back.
+- **On** (`cmd ambient`, key `A`): every param with band `low`, `beat` or `high` and `react ≠ 0` gets `react = 0`; each envelope (B4.5) not already at `AMBIENT_ENV = { attack: 0.3, sustain: 0.5, decay: 2, release: 4 }` is set to it. What was taken (`{ react, band }` per param, the old envelope per group) goes into the **stash**. Crossfade 5 s, whatever `session.xfade` is. `session.ambient = true`.
+- **Off** (same command): each stashed param whose react is still exactly 0 on the same band gets its react back; each group whose envelope still equals `AMBIENT_ENV` gets its envelope back. Every hand edit made meanwhile is kept. Crossfade 5 s; the stash is cleared.
+- **While on:** hand edits are free (that is how reactions are re-added). Preset recall (by hand or by the cycle), Reset, and Undo of an entry from before Ambient pass through the same transform. A whole new Look (recall, Reset all, a pre-ambient undo entry) starts a **fresh** stash, so Off gives back that Look's own reactions and nothing older. A **group** Reset **merges** what it owes into the stash, because the other groups are still owed theirs: a param calmed now writes its entry; a param already at 0 on the same band keeps its old entry; anything else drops it; an envelope already at `AMBIENT_ENV` keeps its old entry. Each undo entry records whether it was pushed while Ambient was on and the stash at that moment; an entry pushed while on is applied as is, with its stash. Randomize leaves no reaction on `low`, `beat` or `high`; mutate leaves a calm (0) reaction there at 0. Save stores the calm Look. Only the button ends Ambient.
+- **Persistence:** the stash lives in the Display's model, never in a preset or a state message, and is written to `ferro.ambient.v1` whenever it changes (`null` when off). At boot, a valid stored stash turns Ambient back on, so a Display reload mid-set can still give everything back. A corrupt value is ignored.
 
 ## B9. Protocol (`src/shared/protocol.ts`)
 
@@ -468,7 +578,8 @@ The live layer (`LIVE = MAX_LAYERS − 1`) is a motif like any other for the sha
 { t: 'hello' }
 { t: 'setParam', id: ParamId, field: 'base' | 'react' | 'band' | 'thr' | 'lock', value }
 { t: 'setOption', key, value }  { t: 'setSession', key, value }  { t: 'setCalib', key, value }
-{ t: 'cmd', name: 'next' | 'prev' | 'random' | 'goto' | 'queue' | 'randomize' | 'mutate' | 'reset' | 'undo'
+{ t: 'setEnv', group: 'shape' | 'line' | 'colour', key: keyof Env, value: number }   // clamped to the B3 ranges
+{ t: 'cmd', name: 'next' | 'prev' | 'random' | 'goto' | 'queue' | 'randomize' | 'mutate' | 'reset' | 'undo' | 'ambient' | 'zero'
               | 'savePreset' | 'loadPreset' | 'deletePreset' | 'renamePreset' | 'importPresets'
               | 'replay', arg? }                                    // replay: arg = ShapeKey of a drawn shape
 // shapes (B12)
@@ -483,7 +594,11 @@ The live layer (`LIVE = MAX_LAYERS − 1`) is a motif like any other for the sha
 // Display → Control
 { t: 'state', state: State, manifest, devices }                    // on hello, and ≤ 10×/s after changes
 { t: 'meters', audio: AudioFrame, values: number[31],              // effective param values, normalised
-  motifA, motifB, morphT, holdRemaining, fps, error?: string }     // 20×/s; doubles as heartbeat
+  motifA, motifB, morphT, holdRemaining, fps,                      // 20×/s; doubles as heartbeat
+  zones: { zoom: [orange, red], mirrorShift: [orange, red] },      // B4.4, normalised slider positions
+  envHits: { shape | line | colour: number },                      // B4.5 hits since the previous meters message
+  hueOffset: number,                                               // the hue-jump offset sent to the shader (0 in fallback)
+  error?: string }
 { t: 'library', version: number, shapes: ShapeMeta[], free: number, persistent: boolean }
                          // on hello and whenever the library changes; free = empty slots; persistent = false without IndexedDB
 { t: 'shapeStrokes', id, name, strokes: Stroke[], duplicateOf?: string }
@@ -507,23 +622,33 @@ Dark, low-luminance UI (the laptop must not light the room): background `#0b0b0d
 - Morph progress bar and beats remaining in the hold.
 - `autoAdvance` toggle, `order`, `holdBeats`, `morphBeats`.
 - Melt mode (3 buttons), mirror X, mirror Y, hue jump every, hue jump amount.
-- Spin button: sets the `spin` base to 1 turn/min when it is 0, else to 0; lit while the base is not 0.
-- Melt hold toggle with a wide scrub slider (`holdPos`).
+- The wall (B5.2): `wall cols` and `wall rows` (1…8), `wave` (rows · snake · centre · diag · rnd), `wave delay` slider (0…1 s).
+- Melt hold toggle with a wide slider labelled `scrub` (`holdPos`); both have a hover tooltip.
+- The three melt buttons have hover tooltips saying what each melt looks like and which sliders shape it.
 
-**Centre: one panel per group** (shape, melt, line, inner, colour). Header has Randomize, Mutate and Reset for that group. One row per param:
+**Centre: one panel per group** (shape, melt, line, inner, colour, trails). Header has Randomize, Mutate and Reset for that group. One row per param:
+
+The colour panel opens with the **colour strip**: the colour wheel laid flat at the live `sat`, with two handles for the at-rest colours at the screen centre, **glow** `G = hue − 0.2 × hueDepth` and **core** `C = hue + 0.3 × hueDepth` (a reference depth of 0.03, a typical line half-width). The handles map one-to-one to the params: `hueDepth = 2 × arc(G → C)` (signed shortest way, taken the way closest to the current depth so opposite handles never flip), `hue = G + 0.2 × hueDepth`. Dragging one handle keeps the other in place; dragging the band between them moves both (changes `hue` only); shift = fine. A bright **bracket** marks the colours on screen now, from live glow `hue_eff + hueOffset − 0.2 × hueDepth_eff` to live core `… + 10 × clamp(0.03 + thickness_eff, 0, 0.1) × hueDepth_eff`, capped at one turn: it stretches on thickness kicks, slides with drift and jumps with hue jumps. `hueSpace` is not drawn (it varies across the screen). Under the strip, a thin **hit lane** holds two markers: where a full hit (gate 1, at the current `reactMaster`) takes glow and core, i.e. the handles of `hue + reactMaster × react_hue` and `hueDepth + reactMaster × react_hueDepth × 2` (clamped). Dragging a marker solves the two reacts back (`react_hue` = the short arc / reactMaster, `react_hueDepth` = Δ / 2 / reactMaster, clamped to −1…1); a row whose band is `none` gets band `low` when its react leaves 0, so the reaction fires. Faint dashed lines in the strip mark the hit colours; the markers are hidden at `reactMaster` 0. The `hue` and `hueDepth` rows stay under the strip for react, band, thr, lock and fine control.
+
+The shape, line and colour headers also hold a **mini curve** (64×18 px) of the group's envelope (B4.5) and a ▾ arrow; the arrow (or a click on the mini curve) opens the **envelope editor** under the header, closed by default:
+- The curve is drawn by `envCurve`, the code the Display runs: the response to "full on through attack and sustain, then off". Soft fill under it. Three sections (attack, sustain, release) separated by thin yellow markers; each section's time axis spans its parameter's whole range (2 s, 10 s, 20 s) on a square-root scale, so short times keep room.
+- Three dots: **A** (sideways: attack), **S** (sideways: decay; up/down: sustain), **R** (sideways: release). Each dot sits at its time constant on the curve. Shift-drag = fine (×0.1). Double-click a dot = back to neutral. Values are printed under the curve.
+- **Trigger lines**, like grains in a granulator: each hit in `meters.envHits` spawns a thin accent line at the start of the curve. A line of age `t` sits where the curve is `t` seconds after its start, on the same axis (through attack, then sustain), from the baseline up to the curve, and fades with a 3 s time constant. Many hits make a cloud of lines; the rate over the last 3 s is printed (`hits/s`). The mini curve shows the lines too.
 
 `label` · **base** slider · **react** slider (−1…+1, centre detent) · **band** select · **thr** slider · **lock** checkbox
 
 - Base sliders are marked at 0 when their range spans it (fill grows from 0), and rotation every 45°. Dragging snaps to a mark within ±2.5% of the track.
 - A moving tick on the base slider shows the live effective value from `meters.values`. This is the main feedback for tuning thresholds.
 - A thin bar under the thr slider shows the chosen band's live level, so the threshold can be set against the signal.
+- The **zoom** and **mirrorShift** base tracks are coloured from `meters.zones` (B4.4): quiet green, orange from where the glow touches the window, red from where the line does. The thumb and the live tick stay the brightest marks.
 - Double-click a slider = reset to default. Shift-drag = fine (×0.1). Mouse wheel = step.
 - Slider input is sent at most once per animation frame.
 
 **Right column: performance**
 - 16 preset slots (click = recall, shift-click = overwrite, right-click = rename or delete). Save button.
-- Randomize all, Mutate all, Undo, Reset all.
-- Sliders: `autopilot`, `reactMaster`, `xfade`. Select: `presetCycleMin`.
+- Randomize all, Mutate all, Undo, Reset all, **Zero (0)**.
+- **Ambient (A)** toggle, lit while on (B8.1); the top bar shows `AMBIENT` while on.
+- Sliders: `autopilot`, `reactMaster`, `xfade`. Toggle: **Zoom stop** (`session.zoomStop`). Select: `presetCycleMin`.
 - Export, Import.
 - Collapsible **Calibration**: input device, `inputGain` (0…4), `onsetK` (0.5…4), `smooth` (0.25…4), `floorDb` (−90…−30), `gainDecay` (4…60 s), `refractoryMs` (150…600), and a live readout of `rawDb` per band.
 
@@ -538,6 +663,7 @@ Dark, low-luminance UI (the laptop must not light the room): background `#0b0b0d
 | B | Fallback | 1–9 | Recall preset |
 | K | Blackout | D | Debug overlay (Display) |
 | Enter | Fullscreen (Display) | P | Draw (Control) |
+| A | Ambient on / off | 0 | Zero |
 
 While the drawing modal is open, the dashboard keys above are off and the modal's own keys (B12.1) apply.
 
@@ -578,7 +704,7 @@ A faint (25% grey) rendering of another shape under the ink, as a tracing guide 
 - `shapeSave` with an `id` re-bakes into the same layer. If that shape is on screen the picture updates on upload; that is intended.
 - `shapeDelete` of the shape on screen: the layer is cleared to blank after the next morph away from it; until then it stays visible. A deleted shape is removed from the pool and the history immediately.
 - `shapeDuplicate` creates a copy named `<name> copy` and answers with its strokes so the modal can open it.
-- **Pool (checkboxes):** `enabled` per shape, stored in `ferro.pool.v1` as the list of disabled keys. Baked and drawn shapes alike. Only the pool is used by `random`, `sequential`, auto-advance and `queued` picking; `goto` and the tiles still reach every shape (B7.2).
+- **Pool (checkboxes):** `enabled` per shape, stored in `ferro.pool.v1` as the list of disabled keys. Baked and drawn shapes alike. Only the pool is used by `random`, `sequential`, auto-advance and `queued` picking; `goto` and the tiles still reach every shape (B7.2). The disabled keys are read from storage when the library is created, before IndexedDB answers, and the baked-only pool the Display uses until the library exists honours them too: an unchecked shape is never chosen, even right after a reload.
 - Thumbnails: the Display renders 160×160 PNG data URLs with `raster.ts` (white ink on transparent, like the bake's thumbs) when a drawn shape is saved, and sends them in `library`. Baked thumbs are the files in `sdf/thumbs/`.
 - Boot: open IndexedDB, load all drawn shapes, bake them in the worker in creation order and upload each on arrival; the Display renders from the baked atlas meanwhile. Send `library` after the first upload and after every change (`version` increments).
 - At boot the pool, history and `queued` are validated against the library; unknown keys are dropped.
@@ -636,6 +762,13 @@ Same result as `tools/bake_sdf.py` (B2.2), computed in a Web Worker so the proje
 - **sequencer:** same seed + same beat stream → same motif sequence; no motif repeats within 3 transitions (count ≥ 5); in silence a morph still starts after `holdBeats × 0.5 s`; with `holdBeats` 0, HOLD lasts at most 1 frame; `uMorphT` is continuous: at 60 fps no frame changes it by more than 0.05, including when a command arrives during a morph and when melt hold is entered or left at any position; the eased curve has `uMorphT = 0.5` at `p = 0.5` for every `linger`, zero speed at `p = 0` and `p = 1`, and is strictly increasing; inverting it returns `p` within 1e-4.
 - **presets:** save → export → import round-trip is identical; randomize and mutate never change locked params and never leave rand or min…max ranges; crossfade endpoints are exact; undo restores the previous Look; hue interpolates the short way.
 - **store:** every message type; unknown messages are ignored; a corrupt `localStorage` value falls back to defaults.
+- **state:** a v1 Look keeps the same zoom push at its base; a v2 Look is not converted again; a v1 zoom without a react keeps the default.
+- **envelope:** neutral settings return the input exactly for any `dt`; attack is the rise time constant; a sustained sound starts at 1 and sags to `sustain`; release is the tail time constant; a second hit inside the tail peaks lower, and after 60 s of quiet the same; 30 and 120 fps give the same peak (1) and curves within 2%; `dt` 0 or 5 keeps `c` and `y` in 0…1. With neutral envelopes 600 random frames equal B4.1 exactly; inner never uses the envelope; `setEnv` clamps and ignores bad input; `lerpLook` interpolates envelopes; randomize and mutate leave them alone; reset restores neutral per group.
+- **colour:** `hsv2rgb` matches the shader for the primaries and white; handles ↔ params round-trips within 1e-9 for `|hueDepth| < 1`; every handle pair gives params in range; moving one handle leaves the other colour unchanged; opposite handles follow the previous sign, equal handles give depth 0; the live span is glow → core, grows with thickness, shifts with `hueOffset`, and is capped at one turn.
+- **ambient:** on zeroes exactly the low, beat and high reactions and sets the envelopes, over 5 s; off gives the original back, keeps hand edits and skips a param whose band changed; recall and reset while on come out calm; a group reset while on keeps the other groups' stash; undo while on keeps a reaction re-added by hand and calms a pre-ambient entry; randomize while on leaves those reactions at 0; the stash survives a reload and a corrupt one is ignored; a v1 preset imported and recalled while on is migrated, calmed, and restored by Off.
+- **reach:** fill grows with zoom and mirrorShift; mirrorShift counts only on a mirrored axis and does not scale with zoom; tilt raises fill; the bisected limit gives fill 1 within 1e-3; a wider or taller window never lowers the limit; radius 0, glow 0 and a zero-size window give finite results. **Stop:** sound never raises zoom past the limit; the hand past it is kept; negative react still pulls in; zones do not move with the kick; stop off = B4.1. `inkRadius` of a known disc within 0.015.
+- **trails:** decay is 0 at `trail` 0 and 1/e after `TRAIL_MAX_S` at 1; decay and the matrix compose (two half steps = one step); the matrix is the identity at 0, 0.
+- **wall:** cell rectangles tile the buffer exactly; the steps of each wave; the random wave is a permutation fixed per seed and size; delays are capped at 6 s; the history returns the newest snapshot at or before `t`, the oldest when too early, and forgets beyond its span; options migrate and validate; Zero and Randomize all keep the wall, Reset all removes it.
 - **strokes:** smoothing keeps a straight raw line straight and never lags the raw point by more than one sample spacing; a point under R6 gives 6 points at the same radius, 60° apart, one group; X mirror negates x only; coverage of a known disc is within 2% of its area; slicing a path at `q × L` returns a prefix whose length is `q × L` within 1e-6, monotonic in `q`, and the whole list at `q = 1`; mid-group every copy is cut at the same length.
 - **raster:** `y = +0.8` maps to the top rows; one-point strokes draw a dot; eraser strokes paint `destination-out` in order; ink = alpha ≥ 128.
 - **sdf:** on a mask holding one centred disc, the field matches the analytic distance within 1 px everywhere, negative inside; a blank mask gives a constant `+2`; the 2×2 downsample is the mean; float16 round-trip of `|d| ≤ 2` is within 2e-3; the mask → float16 bake of a 1024² ring runs in under 60 ms in the test runner (the canvas raster step has no Node equivalent and is measured in the browser).
@@ -720,6 +853,21 @@ M0 passed on 14 Nov on the venue chain (mixer → Focusrite → Display → proj
 - Replay: "draw in" on a saved shape with blackout on: the drawing appears on black, line by line, in your stroke order.
 - Pass: no console errors in either window; 60 fps on the projector while drawing live.
 
+**M8 — Live polish (1 h).** One techno track and one ambient track, `?src=in`.
+- Zoom: on the three largest shapes, play zoom 1–3: the zones sit where the glow and then the line leave the window; with Zoom stop on, the kick's tick never crosses red; resize the window and watch the zones move.
+- Envelope: on each of shape, line and colour, open the curve and try a long release, then a low sustain; the trigger lines show how often each group fires.
+- Ambient: on the ambient track press `A`: the kick reactions fade out over 5 s; re-add one by hand; `A` again gives the rest back. Reload the Display while on: `AMBIENT` is still lit.
+- Colour: the strip's handles sit on the colours the projector shows at rest; the bracket stretches on kicks and jumps with hue jumps.
+- Note which constants to retune: `GLOW_CUTOFF` (0.08), `AMBIENT_ENV`, the zoom max (3).
+
+**M9 — Trails and the wall (1 h).** One techno track, `?src=in`, on the projector.
+- Zero (`0`), then raise `trail`: echoes appear and fade to black. `push` both ways (tunnel out, sink in), `twist` both ways. Put `push` on the kick: each kick throws a ring.
+- Tune: is `trail` at full long enough (`TRAIL_MAX_S`), are `push` and `twist` in a useful range (`PUSH_RATE`, `TWIST_RATE`), does the `max` combine look right or too foggy.
+- Wall: 3×2, then 8×8, each wave pattern; press Next: the melt sweeps across the wall. `wave delay` from 0 to 1 s.
+- Blackout, then **draw in ▶** with trails and wall on: the shape appears on clean black.
+- Fallback (`B`) with trails and wall on: a single plain shape at once.
+- Pass: 60 fps at 8×8 with trails on (else lower `WALL_MAX`); no console errors.
+
 ## D3. Symptom → knob
 
 | Symptom | Fix |
@@ -734,6 +882,9 @@ M0 passed on 14 Nov on the venue chain (mixer → Focusrite → Display → proj
 | Reaction always saturated | Raise `thr` first, then lower `react` |
 | Constant strobing | Lower `react` on `brightness`; raise `hueJumpEvery` |
 | Shapes turn to mush | Lower `warpAmt`, `spikeAmp`; raise `warpScale` |
+| The music turns ambient | Press `A`: kick, beat and high reactions fade out over 5 s, tails get long. Re-add reactions by hand; `A` again gives the rest back |
+| Too jumpy on slow or ambient music | Open the group's curve: drag S down (fatigue) and R right (longer tail) |
+| Shape or glow leaves the window | Watch the zoom row: orange = glow touches, red = line touches. Keep **Zoom stop** on so the kick never crosses red |
 | Lines too thin on the projector | Raise `thickness` base to 0.01–0.02 |
 | Melt looks like a crossfade | Use melt mode fuse; raise `linger`; raise `meltK` |
 | Too busy overall | Lower `reactMaster` to 0.6; autopilot 0.3 |
@@ -754,5 +905,5 @@ chrome --disable-background-timer-throttling --disable-backgrounding-occluded-wi
 6. Drag that window to the projector, click once (starts audio, allow the microphone), press Enter (fullscreen).
 7. Open `http://localhost:5173/control.html` in a second window on the laptop screen. Check the level meter and beat LED.
 8. Load a calm preset. Set `presetCycleMin` and autopilot as rehearsed.
-9. Never minimise the Display window. Emergency keys: `Z`, `B`, `K`.
+9. Never minimise the Display window. Emergency keys: `Z`, `B`, `K`. `A` calms everything for ambient passages; a Display reload keeps Ambient on and can still give everything back.
 10. Bring: spare HDMI cable and adapter, spare audio cable, charger, the exported presets JSON on a USB stick.

@@ -55,6 +55,8 @@ export class Slider {
   readonly el: HTMLDivElement;
   private readonly fill: HTMLDivElement;
   private readonly thumb: HTMLDivElement;
+  private readonly track: HTMLDivElement;
+  private zoneKey = '';
   private readonly tickEl: HTMLDivElement | null;
   private readonly barEl: HTMLDivElement | null;
   private u = 0;
@@ -67,6 +69,7 @@ export class Slider {
     const el = h('div', `slider ${o.cls ?? ''}`.trim());
     this.el = el;
     const track = h('div', 'sl-track', undefined, el);
+    this.track = track;
     for (const d of o.detents ?? []) h('div', 'sl-detent', undefined, track).style.left = `${d * 100}%`;
     this.fill = h('div', 'sl-fill', undefined, track);
     this.tickEl = o.tick ? h('div', 'sl-tick', undefined, track) : null;
@@ -124,6 +127,21 @@ export class Slider {
     if (this.tickEl) this.tickEl.style.left = `${clamp01(u) * 100}%`;
   }
 
+  /**
+   * Design §4.5: track coloured green up to `orangeU`, orange up to `redU`, red after (0…1 positions).
+   * `setZones(1, 1)` shows the plain track.
+   */
+  setZones(orangeU: number, redU: number): void {
+    const o = clamp01(orangeU), r = Math.max(o, clamp01(redU));
+    const key = `${o.toFixed(3)}:${r.toFixed(3)}`;
+    if (key === this.zoneKey) return;
+    this.zoneKey = key;
+    const plain = o >= 1 && r >= 1;
+    this.track.classList.toggle('zoned', !plain);
+    this.track.style.setProperty('--zo', `${o * 100}%`);
+    this.track.style.setProperty('--zr', `${r * 100}%`);
+  }
+
   /** Live level bar (0…1). */
   setBar(u: number): void {
     if (this.barEl) this.barEl.style.transform = `scaleX(${clamp01(u)})`;
@@ -158,9 +176,17 @@ export class Seg<T extends string | number> {
   readonly el: HTMLDivElement;
   private readonly btns: HTMLButtonElement[] = [];
 
-  constructor(private readonly values: readonly T[], labels: readonly string[], onPick: (v: T) => void, parent?: HTMLElement) {
+  /** `titles`: one hover tooltip per button. */
+  constructor(
+    private readonly values: readonly T[], labels: readonly string[], onPick: (v: T) => void, parent?: HTMLElement,
+    titles?: readonly string[],
+  ) {
     this.el = h('div', 'seg', undefined, parent);
-    values.forEach((v, i) => this.btns.push(button(labels[i], () => onPick(v), this.el)));
+    values.forEach((v, i) => {
+      const b = button(labels[i], () => onPick(v), this.el);
+      if (titles?.[i]) b.title = titles[i];
+      this.btns.push(b);
+    });
   }
 
   set(v: T): void {

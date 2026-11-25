@@ -2,12 +2,14 @@ import { describe, expect, test } from 'vitest';
 import {
   Persister, initialModel, patchSession, recallPreset, reduce, renderLook, tick, withDefaultPresets, type Env, type Model,
 } from '../src/display/store';
-import { savePreset } from '../src/display/presets';
+import { ZERO_FADE_S, savePreset } from '../src/display/presets';
+import { AMBIENT_FADE_S, ambientLook } from '../src/display/ambient';
 import {
-  STORAGE_KEYS, defaultCalib, defaultLook, defaultSession, fallbackLook, serialiseCalib, serialiseLook, serialisePresets,
+  STORAGE_KEYS, defaultCalib, defaultLook, migrateZoomReact, defaultSession, fallbackLook, serialiseCalib, serialiseLook, serialisePresets,
   type StorageLike,
 } from '../src/shared/state';
 import { mulberry32 } from '../src/shared/math';
+import { PARAMS, paramDef } from '../src/shared/params';
 
 const NOW = new Date(2026, 10, 19, 22, 0, 0).getTime();
 /** 12 baked shapes (layers 0–11) and one drawn shape `drawn:abc` on layer 12. */
@@ -57,7 +59,7 @@ describe('boot and storage', () => {
     s.setItem(STORAGE_KEYS.look, JSON.stringify({ params: { zoom: { base: 99, band: 'bass' } }, options: { holdBeats: 7 } }));
     const st = initialModel(1, s).model.state;
     expect(st.calib).toEqual({ ...defaultCalib(), floorDb: -90, refractoryMs: 200 });
-    expect(st.look.params.zoom).toEqual({ ...defaultLook().params.zoom, base: 1.4 });
+    expect(st.look.params.zoom).toEqual({ ...defaultLook().params.zoom, base: 3 }); // no stored react → nothing to convert
     expect(st.look.options.holdBeats).toBe(32);
   });
 
@@ -150,7 +152,7 @@ describe('messages', () => {
       { t: 'setParam', id: 'zoom', field: 'thr', value: 2 },
       { t: 'setParam', id: 'zoom', field: 'band', value: 'beat' },
       { t: 'setParam', id: 'zoom', field: 'lock', value: true });
-    expect(m.state.look.params.zoom).toEqual({ base: 1.4, react: -1, thr: 0.95, band: 'beat', lock: true });
+    expect(m.state.look.params.zoom).toEqual({ base: 3, react: -1, thr: 0.95, band: 'beat', lock: true });
     expect(m.state.look.params.rotation).toEqual(defaultLook().params.rotation);
   });
 
@@ -160,7 +162,24 @@ describe('messages', () => {
       { t: 'setOption', key: 'mirrorY', value: true }, { t: 'setOption', key: 'hueJumpEvery', value: 8 },
       { t: 'setOption', key: 'hueJumpAmt', value: 0.9 }, { t: 'setOption', key: 'holdBeats', value: 128 },
       { t: 'setOption', key: 'morphBeats', value: 4 });
-    expect(m.state.look.options).toEqual({ meltMode: 2, mirrorX: true, mirrorY: true, hueJumpEvery: 8, hueJumpAmt: 0.5, holdBeats: 128, morphBeats: 4 });
+    expect(m.state.look.options).toMatchObject({ meltMode: 2, mirrorX: true, mirrorY: true, hueJumpEvery: 8, hueJumpAmt: 0.5, holdBeats: 128, morphBeats: 4 });
+  });
+
+  test('setEnv: clamped to its range; bad group, key or value leaves the model untouched', () => {
+    const m = apply(fresh(), { t: 'setEnv', group: 'shape', key: 'release', value: 99 }, { t: 'setEnv', group: 'line', key: 'sustain', value: 0.3 });
+    expect(m.state.look.env.shape.release).toBe(20);
+    expect(m.state.look.env.line.sustain).toBe(0.3);
+    for (const bad of [
+      { t: 'setEnv', group: 'inner', key: 'release', value: 1 }, { t: 'setEnv', group: 'shape', key: 'hold', value: 1 },
+      { t: 'setEnv', group: 'shape', key: 'attack', value: 'x' }, { t: 'setEnv', group: 'shape', key: 'attack', value: NaN },
+    ]) expect(reduce(m, bad, env()).model).toBe(m);
+  });
+
+  test('setSession zoomStop: a boolean is applied, anything else ignored', () => {
+    expect(fresh().state.session.zoomStop).toBe(true);
+    const m = apply(fresh(), { t: 'setSession', key: 'zoomStop', value: false });
+    expect(m.state.session.zoomStop).toBe(false);
+    expect(apply(m, { t: 'setSession', key: 'zoomStop', value: 1 }).state.session.zoomStop).toBe(false);
   });
 
   test('setSession: every key', () => {
@@ -170,10 +189,11 @@ describe('messages', () => {
       { t: 'setSession', key: 'order', value: 'sequential' }, { t: 'setSession', key: 'presetCycleMin', value: 5 },
       { t: 'setSession', key: 'frozen', value: true }, { t: 'setSession', key: 'fallback', value: true },
       { t: 'setSession', key: 'blackout', value: true }, { t: 'setSession', key: 'meltHold', value: true },
-      { t: 'setSession', key: 'holdPos', value: -1 }, { t: 'setSession', key: 'queued', value: 4 });
+      { t: 'setSession', key: 'holdPos', value: -1 }, { t: 'setSession', key: 'queued', value: 4 },
+      { t: 'setSession', key: 'zoomStop', value: false });
     expect(m.state.session).toEqual({
       autopilot: 1, reactMaster: 1.5, xfade: 8, autoAdvance: false, order: 'sequential', presetCycleMin: 5,
-      frozen: true, fallback: true, blackout: true, meltHold: true, holdPos: 0, queued: 4, live: false,
+      frozen: true, fallback: true, blackout: true, meltHold: true, holdPos: 0, queued: 4, live: false, zoomStop: false, ambient: false,
     });
     expect(apply(m, { t: 'setSession', key: 'queued', value: null }).state.session.queued).toBeNull();
   });
@@ -209,11 +229,11 @@ describe('messages', () => {
     const m1 = apply(m0, { t: 'cmd', name: 'randomize' });
     expect(m1.state.look).not.toEqual(look0);
     expect(m1.fade?.dur).toBe(2);
-    expect(m1.undo.at(-1)).toBe(look0);
+    expect(m1.undo.at(-1)?.look).toBe(look0);
     expect(renderLook(m1)).toEqual(look0); // the fade starts from what was on screen
     const m2 = apply(m1, { t: 'cmd', name: 'mutate', arg: 'colour' });
     expect(m2.undo).toHaveLength(2);
-    for (const k of ['zoom', 'tiltX'] as const) expect(m2.state.look.params[k]).toEqual(m1.state.look.params[k]);
+    for (const k of ['zoom', 'tiltAmt'] as const) expect(m2.state.look.params[k]).toEqual(m1.state.look.params[k]);
     const m3 = apply(m2, { t: 'cmd', name: 'reset', arg: 'shape' });
     expect(m3.state.look.params.zoom).toEqual(defaultLook().params.zoom);
     const u = apply(m3, { t: 'cmd', name: 'undo' });
@@ -273,7 +293,7 @@ describe('display-side writes', () => {
   test('fallback renders the safe Look without touching the live one', () => {
     const m = apply(fresh(), { t: 'cmd', name: 'randomize' }, { t: 'setSession', key: 'fallback', value: true });
     expect(renderLook(m)).toEqual(fallbackLook());
-    expect(renderLook(m).params.zoom.react).toBe(0.06);
+    expect(renderLook(m).params.zoom.react).toBe(paramDef('zoom').react);
     expect(renderLook(m).params.glow.react).toBe(0);
     expect(m.state.look).not.toEqual(fallbackLook());
   });
@@ -362,5 +382,204 @@ describe('shapes and live (B12)', () => {
     expect(gone.model.state.session.queued).toBeNull();
     expect(gone.effects).toEqual([{ t: 'seqForget', layer: 12 }]);
     expect(reduce(q, { t: 'shapeGone', layer: 3 }, env()).model.state.session.queued).toBe(12);
+  });
+});
+
+describe('Ambient (design §6)', () => {
+  const on = (m: Model = fresh()): Model => apply(m, { t: 'cmd', name: 'ambient' });
+
+  test('on: calms over 5 s whatever xfade says, stashes, pushes one undo entry tagged not-ambient', () => {
+    const m0 = apply(fresh(), { t: 'setSession', key: 'xfade', value: 1 });
+    const m = on(m0);
+    expect(m.state.session.ambient).toBe(true);
+    expect(m.fade?.dur).toBe(AMBIENT_FADE_S);
+    expect(m.state.look).toEqual(ambientLook(m0.state.look).look);
+    expect(m.ambientStash).toEqual(ambientLook(m0.state.look).stash);
+    expect(m.undo).toHaveLength(m0.undo.length + 1);
+    expect(m.undo.at(-1)).toEqual({ look: m0.state.look, ambient: false, stash: null });
+  });
+
+  test('off: gives the original back over 5 s and clears the stash', () => {
+    const m0 = fresh();
+    const m = on(on(m0));
+    expect(m.state.session.ambient).toBe(false);
+    expect(m.ambientStash).toBeNull();
+    expect(m.fade?.dur).toBe(AMBIENT_FADE_S);
+    expect(m.state.look).toEqual(m0.state.look);
+  });
+
+  test('a reaction re-added by hand survives Off; the others come back', () => {
+    const m0 = fresh();
+    const m = on(apply(on(m0), { t: 'setParam', id: 'zoom', field: 'react', value: 0.2 }));
+    expect(m.state.look.params.zoom.react).toBe(0.2);
+    expect(m.state.look.params.glow.react).toBe(m0.state.look.params.glow.react);
+  });
+
+  test('recall (by hand and by the cycle) and reset come out calm; Ambient stays on', () => {
+    const look = defaultLook();
+    look.params.zoom.react = 0.4;
+    const withPreset = { ...fresh(), state: { ...fresh().state, presets: savePreset(new Array(16).fill(null), look, NOW).presets } };
+    const a = apply(on(withPreset), { t: 'cmd', name: 'loadPreset', arg: 0 });
+    expect(a.state.look.params.zoom.react).toBe(0);
+    expect(a.state.session.ambient).toBe(true);
+    expect(a.ambientStash?.react.zoom?.react).toBe(0.4);
+    const c = recallPreset(on(withPreset), 0, 8);
+    expect(c.state.look.params.zoom.react).toBe(0);
+    const r = apply(on(), { t: 'cmd', name: 'reset' });
+    expect(r.state.look.params.glow.react).toBe(0);
+    expect(r.state.session.ambient).toBe(true);
+  });
+
+  test('a group reset while on keeps the other groups owed; Off restores them', () => {
+    const m0 = fresh();
+    const m = on(apply(on(m0), { t: 'cmd', name: 'reset', arg: 'colour' }));
+    expect(m.state.look.params.zoom.react).toBe(m0.state.look.params.zoom.react);
+    expect(m.state.look.env.shape).toEqual(m0.state.look.env.shape);
+  });
+
+  test('undo while on: an ambient entry comes back as is, a pre-ambient one comes back calm', () => {
+    const m1 = apply(on(), { t: 'setParam', id: 'zoom', field: 'react', value: 0.3 }, { t: 'cmd', name: 'randomize' });
+    const u1 = apply(m1, { t: 'cmd', name: 'undo' });
+    expect(u1.state.look.params.zoom.react).toBe(0.3);
+    const u2 = apply(on(), { t: 'cmd', name: 'undo' });
+    expect(u2.state.look.params.glow.react).toBe(0);
+    expect(u2.state.session.ambient).toBe(true);
+  });
+
+  test('randomize while on leaves no reaction on low, beat or high', () => {
+    const m = apply(on(), { t: 'cmd', name: 'randomize' });
+    for (const def of PARAMS) {
+      const ps = m.state.look.params[def.id];
+      if (['low', 'beat', 'high'].includes(ps.band)) expect(ps.react).toBe(0);
+    }
+  });
+
+  test('save while on stores the calm Look; the stash is never in State', () => {
+    const m = apply(on(), { t: 'cmd', name: 'savePreset' });
+    expect(m.state.presets[0]?.look).toEqual(m.state.look);
+    expect(JSON.stringify(m.state)).not.toContain('ambientStash');
+  });
+
+  test('setSession cannot turn Ambient on', () => {
+    expect(apply(fresh(), { t: 'setSession', key: 'ambient', value: true }).state.session.ambient).toBe(false);
+  });
+
+  test('the stash is persisted and survives a reload; a corrupt value is ignored', () => {
+    const s = new MemStorage();
+    const p = new Persister(s);
+    const m0 = fresh();
+    p.update(m0.state, 0, m0.ambientStash);
+    const m = on(m0);
+    p.update(m.state, 5000, m.ambientStash);
+    expect(JSON.parse(s.getItem(STORAGE_KEYS.ambient) ?? 'null')).toEqual(m.ambientStash);
+    const b = initialModel(1, s).model;
+    expect(b.state.session.ambient).toBe(true);
+    expect(b.ambientStash).toEqual(m.ambientStash);
+    const off = on(m);
+    p.update(off.state, 10000, off.ambientStash);
+    expect(initialModel(1, s).model.state.session.ambient).toBe(false);
+    s.setItem(STORAGE_KEYS.ambient, '{"react": 3}');
+    expect(initialModel(1, s).model.state.session.ambient).toBe(false);
+  });
+
+  test('a v1 preset imported and recalled while on is migrated, calmed, and restored by Off (Review Focus 4)', () => {
+    const v1 = { version: 1, presets: [{ name: 'old', savedAt: 0, look: { params: { zoom: { base: 0.85, react: 0.5, band: 'low', thr: 0, lock: false } } } }] };
+    const m = apply(on(), { t: 'cmd', name: 'importPresets', arg: v1 }, { t: 'cmd', name: 'loadPreset', arg: 0 });
+    expect(m.state.look.v).toBe(2);
+    expect(m.state.look.params.zoom.react).toBe(0);
+    const back = on(m);
+    expect(back.state.look.params.zoom.react).toBeCloseTo(migrateZoomReact(0.5, 0.85), 9);
+  });
+});
+
+describe('Ambient: final review fixes', () => {
+  const on = (m: Model): Model => apply(m, { t: 'cmd', name: 'ambient' });
+  const withPresets = (...looks: ReturnType<typeof defaultLook>[]): Model => {
+    let presets = new Array(16).fill(null);
+    for (const l of looks) presets = savePreset(presets, l, NOW).presets;
+    const m = fresh();
+    return { ...m, state: { ...m.state, presets } };
+  };
+
+  test('recall → undo → off gives back the Look that was undone to, not the recalled preset', () => {
+    const b = defaultLook();
+    b.params.zoom.react = 0.5;
+    const m0 = withPresets(b);
+    const a = apply(m0, { t: 'setParam', id: 'zoom', field: 'react', value: 0.3 });
+    const m = on(apply(on(a), { t: 'cmd', name: 'loadPreset', arg: 0 }, { t: 'cmd', name: 'undo' }));
+    expect(m.state.look.params.zoom.react).toBe(0.3);
+  });
+
+  test('a recalled preset with no kick reaction does not inherit the previous one at Off', () => {
+    const b = defaultLook();
+    b.params.zoom.react = 0;
+    const m0 = apply(withPresets(b), { t: 'setParam', id: 'zoom', field: 'react', value: 0.3 });
+    const m = on(apply(on(m0), { t: 'cmd', name: 'loadPreset', arg: 0 }));
+    expect(m.state.look.params.zoom.react).toBe(0);
+  });
+
+  test('reset all while on starts a fresh stash; a group reset still merges', () => {
+    const a = apply(fresh(), { t: 'setParam', id: 'zoom', field: 'react', value: 0.3 });
+    const all = on(apply(on(a), { t: 'cmd', name: 'reset' }));
+    expect(all.state.look.params.zoom.react).toBe(defaultLook().params.zoom.react);
+    const group = on(apply(on(a), { t: 'cmd', name: 'reset', arg: 'colour' }));
+    expect(group.state.look.params.zoom.react).toBe(0.3);
+  });
+});
+
+describe('zero', () => {
+  const lively = (): Model => apply(fresh(), { t: 'setSession', key: 'autopilot', value: 0.7 }, { t: 'setSession', key: 'presetCycleMin', value: 5 }, { t: 'setParam', id: 'warpAmt', field: 'base', value: 0.1 });
+
+  test('fades to a plain line over 1 s, stops the autopilot, and undo brings the Look back', () => {
+    const m0 = lively();
+    const m = apply(m0, { t: 'cmd', name: 'zero' });
+    expect(m.state.look.params.warpAmt.base).toBe(0);
+    expect(m.state.look.params.glow.react).toBe(0);
+    expect(m.state.look.params.zoom.base).toBe(m0.state.look.params.zoom.base);
+    expect(m.state.session.autopilot).toBe(0);
+    expect(m.state.session.presetCycleMin).toBe(0); // a cycle recall would overwrite the look being built
+    expect(m.fade?.dur).toBe(ZERO_FADE_S);
+    const back = apply(m, { t: 'cmd', name: 'undo' });
+    expect(back.state.look).toEqual(m0.state.look);
+  });
+
+  test('while Ambient is on, Zero leaves nothing owed: Off stays at zero', () => {
+    const m = apply(lively(), { t: 'cmd', name: 'ambient' }, { t: 'cmd', name: 'zero' }, { t: 'cmd', name: 'ambient' });
+    expect(m.state.session.ambient).toBe(false);
+    for (const def of PARAMS) expect(m.state.look.params[def.id].react).toBe(0);
+    expect(m.state.look.env.shape).toEqual({ attack: 0, sustain: 1, decay: 1, release: 0 });
+  });
+});
+
+describe('wall options', () => {
+  test('setOption accepts sizes 1…8, the five waves and a delay of 0…1 s', () => {
+    const m = apply(fresh(), { t: 'setOption', key: 'wallCols', value: 4 }, { t: 'setOption', key: 'wallRows', value: 8 },
+      { t: 'setOption', key: 'wallWave', value: 3 }, { t: 'setOption', key: 'wallDelay', value: 2 });
+    expect(m.state.look.options).toMatchObject({ wallCols: 4, wallRows: 8, wallWave: 3, wallDelay: 1 });
+  });
+
+  test('anything else is ignored', () => {
+    const m0 = fresh();
+    const m = apply(m0, { t: 'setOption', key: 'wallCols', value: 0 }, { t: 'setOption', key: 'wallCols', value: 9 },
+      { t: 'setOption', key: 'wallRows', value: 2.5 }, { t: 'setOption', key: 'wallWave', value: 5 }, { t: 'setOption', key: 'wallDelay', value: 'x' });
+    expect(m.state.look.options).toEqual(m0.state.look.options);
+  });
+
+  test('recalling a preset keeps the wall that is on screen, whatever the preset stored', () => {
+    const stored = defaultLook();
+    stored.options.wallCols = 5; stored.options.wallWave = 4; stored.options.meltMode = 2;
+    const base = fresh();
+    const withPreset = { ...base, state: { ...base.state, presets: savePreset(new Array(16).fill(null), stored, NOW).presets } };
+    const wall = apply(withPreset, { t: 'setOption', key: 'wallCols', value: 3 }, { t: 'setOption', key: 'wallRows', value: 2 }, { t: 'setOption', key: 'wallDelay', value: 0.4 });
+    for (const m of [apply(wall, { t: 'cmd', name: 'loadPreset', arg: 0 }), recallPreset(wall, 0, 8)]) {
+      expect(m.state.look.options).toMatchObject({ wallCols: 3, wallRows: 2, wallWave: 0, wallDelay: 0.4, meltMode: 2 });
+    }
+  });
+
+  test('Reset all removes the wall; Zero and Randomize all leave it', () => {
+    const wall = apply(fresh(), { t: 'setOption', key: 'wallCols', value: 3 }, { t: 'setOption', key: 'wallWave', value: 2 });
+    expect(apply(wall, { t: 'cmd', name: 'reset' }).state.look.options.wallCols).toBe(1);
+    expect(apply(wall, { t: 'cmd', name: 'zero' }).state.look.options).toMatchObject({ wallCols: 3, wallWave: 2 });
+    expect(apply(wall, { t: 'cmd', name: 'randomize' }).state.look.options).toMatchObject({ wallCols: 3, wallWave: 2 });
   });
 });
