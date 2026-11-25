@@ -6,16 +6,29 @@ import type { WallWave } from '../shared/state';
 /** How far back a cell can look, in seconds: the last cell is never later than this. */
 export const WALL_HISTORY_S = 6;
 
+/** Time constant (s) of a change of wall size. */
+export const WALL_EASE_S = 0.25;
+const EASE_SNAP = 0.01;
+
+/** One frame of the glide from the wall size on screen to the one asked for; lands exactly. */
+export function easeWall(current: number, target: number, dt: number): number {
+  const next = target + (current - target) * Math.exp(-dt / WALL_EASE_S);
+  return Math.abs(next - target) < EASE_SNAP ? target : next;
+}
+
 /**
  * One rectangle per cell [x, y, w, h] in GL pixels (origin bottom-left), row by row from the TOP row.
  * Edges are at floor(i × size / count), so the cells tile the buffer with no gap.
+ * `cols` and `rows` may be fractional while the wall changes size: there are then ceil(cols) × ceil(rows) cells
+ * of size w/cols × h/rows, anchored top-left, and the last column and row run off the right and bottom edges.
  */
 export function cellRects(w: number, h: number, cols: number, rows: number): [number, number, number, number][] {
   const out: [number, number, number, number][] = [];
-  for (let row = 0; row < rows; row++) {
+  const nCols = Math.ceil(cols), nRows = Math.ceil(rows);
+  for (let row = 0; row < nRows; row++) {
     const top = h - Math.floor((row * h) / rows);
     const bottom = h - Math.floor(((row + 1) * h) / rows);
-    for (let col = 0; col < cols; col++) {
+    for (let col = 0; col < nCols; col++) {
       const x0 = Math.floor((col * w) / cols);
       out.push([x0, bottom, Math.floor(((col + 1) * w) / cols) - x0, top - bottom]);
     }

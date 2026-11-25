@@ -9,7 +9,7 @@ import type { Stroke } from '../shared/strokes';
 import { keyAction, isTyping } from '../shared/keys';
 import { Renderer, type CellDraw, type FrameUniforms } from './gl';
 import { trailDecay, trailMatrix } from './trails';
-import { History, WALL_HISTORY_S, cellAspect, cellDelays, cellRects, cellSteps } from './wall';
+import { History, WALL_HISTORY_S, cellAspect, cellDelays, cellRects, cellSteps, easeWall } from './wall';
 import { Debug } from './debug';
 import { Analyser } from './audio/analyser';
 import { idleFrame } from './audio/dsp';
@@ -95,9 +95,14 @@ function stepsFor(cols: number, rows: number, wave: WallWave): number[] {
   return wallSteps.steps;
 }
 /** One draw per cell: the first-step cells show `now`, the others what was on screen `delay` seconds ago. */
-function wallCells(now: FrameUniforms, o: LookOptions, dt: number): CellDraw[] {
-  const { wallCols: cols, wallRows: rows } = o;
-  const rects = cellRects(canvas.width, canvas.height, cols, rows);
+let wallSize: { cols: number; rows: number } | null = null;
+function wallCells(now: FrameUniforms, o: LookOptions, dt: number, snap: boolean): CellDraw[] {
+  // a change of size glides (the cells shrink and new ones slide in from the right and the bottom); Fallback is instant
+  wallSize = wallSize && !snap
+    ? { cols: easeWall(wallSize.cols, o.wallCols, dt), rows: easeWall(wallSize.rows, o.wallRows, dt) }
+    : { cols: o.wallCols, rows: o.wallRows };
+  const rects = cellRects(canvas.width, canvas.height, wallSize.cols, wallSize.rows);
+  const cols = Math.ceil(wallSize.cols), rows = Math.ceil(wallSize.rows);
   if (cols * rows === 1) { wallHistory.clear(); return [{ rect: rects[0], u: now }]; }
   wallClock += dt;
   wallHistory.push(wallClock, { ...now, params: new Float32Array(now.params), tilt: [now.tilt[0], now.tilt[1]] });
@@ -354,7 +359,7 @@ function frame(nowMs: number): void {
     };
     const v = mod.values;
     renderer.draw(
-      wallCells(now, look.options, dt),
+      wallCells(now, look.options, dt, fb),
       { decay: fb ? 0 : trailDecay(v[PARAM_INDEX.trail], dt), m: trailMatrix(v[PARAM_INDEX.push], v[PARAM_INDEX.twist], dt) },
       { master, frame: frameNo++, grain: v[PARAM_INDEX.grain] },
     );

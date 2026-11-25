@@ -459,6 +459,7 @@ Notes:
 `wallCols × wallRows` cells (1…`WALL_MAX` = 8 each). Every cell shows the same picture at a different moment.
 
 - **Cells:** edges at `floor(i × W / cols)` and `floor(j × H / rows)`; the shape is sized to the cell's short side; tilt, mirrors, zoom and `hueSpace` are per cell. Glow or line reaching a cell edge is cut there.
+- **Changing size** glides (`easeWall`, time constant `WALL_EASE_S = 0.25` s): the size on screen is fractional on the way, with `ceil(cols) × ceil(rows)` cells of `W/cols × H/rows` anchored top-left, so the cells shrink and new ones slide in from the right and the bottom (or slide out). Steps follow the cell count on screen. Fallback is instant.
 - **Steps** (row 0 = top, column 0 = left): rows `row × cols + col` · snake (odd rows right to left) · centre `floor(max(|col − (cols−1)/2|, |row − (rows−1)/2|))` · diagonal `col + row` · random (a shuffle fixed per seed and size, on its own PRNG stream `wall`).
 - **Delay** of a cell = `step × wallDelay`; when the largest would pass `WALL_HISTORY_S = 6` s, all delays are scaled down so the last cell is 6 s late.
 - **History:** while the wall is larger than 1×1 the Display keeps the last 6 s of frame inputs (param values, phases, tilt, hue offset, both layers, `uMorphT`, melt mode, mirrors). A cell is drawn with the newest snapshot at least its delay old (the oldest one when history is shorter). So reactions and the melt cross the wall as a wave.

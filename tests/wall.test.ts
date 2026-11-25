@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { History, WALL_HISTORY_S, cellAspect, cellDelays, cellRects, cellSteps } from '../src/display/wall';
+import { History, WALL_EASE_S, WALL_HISTORY_S, cellAspect, cellDelays, cellRects, cellSteps, easeWall } from '../src/display/wall';
 
 describe('cell rectangles', () => {
   test.each([[1000, 563, 3, 2], [1000, 563, 7, 8], [1920, 1080, 1, 1]])('%i×%i in %i×%i tiles the buffer exactly', (w, h, cols, rows) => {
@@ -17,6 +17,30 @@ describe('cell rectangles', () => {
         if (row === 0) expect(y + ch).toBe(h); // the first row is the top one
       }
     }
+  });
+});
+
+describe('a wall changing size', () => {
+  test('between two sizes the cells keep the top-left corner and the last column and row run off the edge', () => {
+    const r = cellRects(1000, 600, 2.5, 1.5);
+    expect(r).toHaveLength(3 * 2);
+    expect(r.map(([x]) => x).slice(0, 3)).toEqual([0, 400, 800]);
+    expect(r[2][0] + r[2][2]).toBe(1200); // the third column is half out of the window
+    expect(r[0][1] + r[0][3]).toBe(600); // the first row touches the top
+    expect(r[0][3]).toBe(400);
+    expect(r[3][1]).toBe(-200); // the second row is half out at the bottom
+  });
+
+  test('eases towards the target, at the same pace whatever the frame rate, and lands exactly', () => {
+    let a = 2, b = 2;
+    for (let i = 0; i < 6; i++) a = easeWall(a, 5, 1 / 60);
+    for (let i = 0; i < 12; i++) b = easeWall(b, 5, 1 / 120);
+    expect(a).toBeGreaterThan(2);
+    expect(a).toBeLessThan(5);
+    expect(a).toBeCloseTo(b, 9);
+    for (let i = 0; i < 60 * 6 * WALL_EASE_S; i++) a = easeWall(a, 5, 1 / 60);
+    expect(a).toBe(5);
+    expect(easeWall(4, 4, 1 / 60)).toBe(4);
   });
 });
 
