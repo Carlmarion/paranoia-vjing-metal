@@ -169,6 +169,8 @@ export function randomize(look: Look, rng: Rng, group?: Group, ambient = false):
 }
 
 export const MUTATE_SD = { base: 0.08, react: 0.1, thr: 0.05 } as const;
+/** Mutate all leaves these bases alone (it would switch trails on in old Looks); the group's own Mutate moves them. */
+export const MUTATE_ALL_SKIP: readonly ParamId[] = ['trail'];
 
 /** B8 mutate: small gaussian steps around the current Look. Options unchanged. `ambient`: calmed reactions stay 0. */
 export function mutate(look: Look, rng: Rng, group?: Group, ambient = false): Look {
@@ -176,7 +178,8 @@ export function mutate(look: Look, rng: Rng, group?: Group, ambient = false): Lo
   for (const def of PARAMS) {
     const ps = out.params[def.id];
     if (ps.lock || (group && def.group !== group)) continue;
-    ps.base = fromNorm(def, clamp01(toNorm(def, ps.base) + gaussian(rng) * MUTATE_SD.base));
+    const step = gaussian(rng) * MUTATE_SD.base; // drawn even when skipped, so the other params mutate as before
+    if (group || !MUTATE_ALL_SKIP.includes(def.id)) ps.base = fromNorm(def, clamp01(toNorm(def, ps.base) + step));
     const calmed = ambient && ps.react === 0 && AMBIENT_BANDS.has(ps.band);
     if (!calmed) ps.react = clamp(ps.react + gaussian(rng) * MUTATE_SD.react * (def.reactScale ?? 1), REACT_RANGE[0], REACT_RANGE[1]);
     ps.thr = clamp(ps.thr + gaussian(rng) * MUTATE_SD.thr, THR_RANGE[0], THR_RANGE[1]);
@@ -205,6 +208,7 @@ export const ZERO_FADE_S = 1;
 /** The effect amounts Zero sets to 0. Colour, thickness, zoom and the melt settings stay as they are. */
 export const ZERO_BASES: readonly ParamId[] = [
   'rotation', 'spin', 'tiltAmt', 'tiltSpeed', 'mirrorShift', 'warpAmt', 'spikeAmp', 'waveAmt', 'ripple', 'glow', 'grain',
+  'trail', 'push', 'twist',
 ];
 
 /** B8 Zero: a plain, still line to build up from. No reaction, no effect amount, neutral envelopes, no hue jumps. Locked params stay. */

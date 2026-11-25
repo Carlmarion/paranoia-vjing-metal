@@ -234,6 +234,31 @@ describe('zero', () => {
   });
 });
 
+describe('trails in presets', () => {
+  const withTrail = (): Look => { const l = defaultLook(); l.params.trail.base = 0.6; l.params.push.base = 0.4; l.params.twist.base = -0.3; return l; };
+
+  test('Zero switches the trails off', () => {
+    const z = zeroLook(withTrail());
+    for (const id of ['trail', 'push', 'twist'] as const) expect(z.params[id].base).toBe(0);
+  });
+
+  test('Randomize all and Mutate all never switch trails on; the trails Mutate moves it', () => {
+    const rng = mulberry32(5);
+    let l = defaultLook();
+    for (let i = 0; i < 200; i++) { l = mutate(randomize(l, rng), rng); expect(l.params.trail.base).toBe(0); }
+    let g = defaultLook(), moved = false;
+    for (let i = 0; i < 20; i++) { g = mutate(g, rng, 'trails'); moved ||= g.params.trail.base > 0; }
+    expect(moved).toBe(true);
+  });
+
+  test('an old preset without the trail sliders gets them at 0', () => {
+    const old = JSON.parse(JSON.stringify([{ name: 'x', savedAt: 1, look: defaultLook() }])) as { look: { params: Record<string, unknown> } }[];
+    for (const id of ['trail', 'push', 'twist']) delete old[0].look.params[id];
+    const p = migratePresets(old)[0];
+    for (const id of ['trail', 'push', 'twist'] as const) expect(p?.look.params[id].base).toBe(0);
+  });
+});
+
 describe('crossfade', () => {
   test('endpoints are exact', () => {
     const a = lookedUp();

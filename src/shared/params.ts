@@ -3,7 +3,7 @@
 
 export type Band = 'none' | 'low' | 'mid' | 'high' | 'energy' | 'beat';
 export type Scale = 'lin' | 'log' | 'wrap';
-export type Group = 'shape' | 'melt' | 'line' | 'inner' | 'colour';
+export type Group = 'shape' | 'melt' | 'line' | 'inner' | 'colour' | 'trails';
 
 export interface ParamDef {
   id: string;
@@ -64,6 +64,10 @@ export const PARAMS = [
   row('glow', 'colour', 'lin', 0, 1, 0.15, 'low', 0.3, 0.2, 0.1, 85, [0, 0.5]),
   row('glowWidth', 'colour', 'log', 0.02, 0.4, 0.12, 'none', 0, 0, 0.1, 125, [0.04, 0.3]),
   row('grain', 'colour', 'lin', 0, 0.3, 0.04, 'high', 0.3, 0.3, 0, null, [0, 0.12]),
+  // trails (design 2026-11-25 §5): `trail` is never randomized, so Randomize can't switch trails on
+  row('trail', 'trails', 'lin', 0, 1, 0, 'none', 0, 0, 0, null, null),
+  row('push', 'trails', 'lin', -1, 1, 0, 'none', 0, 0, 0, null, [-0.3, 0.3]),
+  row('twist', 'trails', 'lin', -1, 1, 0, 'none', 0, 0, 0, null, [-0.1, 0.1]),
 ] as const satisfies readonly ParamDef[];
 
 export type ParamId = (typeof PARAMS)[number]['id'];
@@ -72,7 +76,7 @@ export const PARAM_IDS: ParamId[] = PARAMS.map((p) => p.id);
 export const PARAM_INDEX: Record<ParamId, number> = Object.fromEntries(
   PARAMS.map((p, i) => [p.id, i]),
 ) as Record<ParamId, number>;
-export const GROUPS: Group[] = ['shape', 'melt', 'line', 'inner', 'colour'];
+export const GROUPS: Group[] = ['shape', 'melt', 'line', 'inner', 'colour', 'trails'];
 
 export function paramDef(id: ParamId): ParamDef {
   return PARAMS[PARAM_INDEX[id]];
