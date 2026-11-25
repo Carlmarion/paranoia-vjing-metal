@@ -4,9 +4,10 @@ import './control.css';
 import { PARAMS, PARAM_INDEX, GROUPS, fromNorm, toNorm, type Band, type Group, type ParamDef } from '../shared/params';
 import {
   BANDS, HOLD_BEATS, MORPH_BEATS, HUE_JUMP_EVERY, MELT_MODES, ORDERS, PRESET_CYCLE_MIN, PRESET_SLOTS,
-  REACT_RANGE, THR_RANGE, HUE_JUMP_AMT_RANGE, SESSION_RANGES, CALIB_RANGES,
+  REACT_RANGE, THR_RANGE, HUE_JUMP_AMT_RANGE, SESSION_RANGES, CALIB_RANGES, WALL_DELAY_RANGE, WALL_SIZES, WALL_WAVES,
   ENV_GROUPS, defaultSession, defaultCalib, defaultOptions, isEnvGroup, neutralEnv, serialisePresets, parseJson,
   type EnvGroup, type Session, type Calib, type LookOptions, type MeltMode, type HoldBeats, type MorphBeats, type HueJumpEvery, type Order,
+  type WallWave,
 } from '../shared/state';
 import { bandValue, createBroadcastTransport, type ControlMsg, type StateMsg, type MetersMsg } from '../shared/protocol';
 import { keyAction, isTyping } from '../shared/keys';
@@ -148,6 +149,15 @@ const toggleOption = (key: BoolOption): void => {
 const mirrorRow = row('mirror', left);
 const mirrorXBtn = toggleBtn('X', () => toggleOption('mirrorX'), mirrorRow);
 const mirrorYBtn = toggleBtn('Y', () => toggleOption('mirrorY'), mirrorRow);
+// the wall (design 2026-11-25 §6.1): the shape repeated as cols × rows cells, each `delay` later along the wave
+const wallSize = (key: 'wallCols' | 'wallRows', label: string): Seg<number> =>
+  new Seg<number>(WALL_SIZES, WALL_SIZES.map(String), (v) => send({ t: 'setOption', key, value: v }), row(label, left));
+const wallColsSeg = wallSize('wallCols', 'wall cols');
+const wallRowsSeg = wallSize('wallRows', 'wall rows');
+const wallWaveSeg = new Seg<WallWave>(WALL_WAVES, ['rows', 'snake', 'centre', 'diag', 'rnd'],
+  (v) => send({ t: 'setOption', key: 'wallWave', value: v }), row('wave', left));
+const wallDelay = numSlider(left, 'wave delay', lin(...WALL_DELAY_RANGE), 'o:wallDelay',
+  (v) => ({ t: 'setOption', key: 'wallDelay', value: v }), defaultOptions().wallDelay, { unit: 's' });
 /** Speed (turns/min) the spin shortcut sets; pressing it again sets 0. */
 const SPIN_SHORTCUT_RPM = 1;
 const spinBtn = toggleBtn('spin', () => {
@@ -429,6 +439,10 @@ function applyState(msg: StateMsg): void {
   meltSeg.set(o.meltMode);
   hueEverySeg.set(o.hueJumpEvery);
   hueAmt.set(o.hueJumpAmt);
+  wallColsSeg.set(o.wallCols);
+  wallRowsSeg.set(o.wallRows);
+  wallWaveSeg.set(o.wallWave);
+  wallDelay.set(o.wallDelay);
   setOn(mirrorXBtn, o.mirrorX);
   setOn(mirrorYBtn, o.mirrorY);
   setOn(spinBtn, look.params.spin.base !== 0);

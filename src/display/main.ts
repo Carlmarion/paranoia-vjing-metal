@@ -1,14 +1,15 @@
 // Display window (SPEC B11): owns all state, audio, autopilot and rendering.
 import { PARAM_INDEX } from '../shared/params';
 import { clamp, streamRng } from '../shared/math';
-import { ENV_GROUPS, dateSeed, getStorage } from '../shared/state';
+import { ENV_GROUPS, dateSeed, getStorage, type LookOptions, type WallWave } from '../shared/state';
 import { DISPLAY_MSG_TYPES, MAX_LAYERS, createBroadcastTransport, type DeviceInfo, type Manifest, type MetersMsg, type Msg } from '../shared/protocol';
 import { inkRadius } from '../shared/sdf';
 import { drawStrokes } from '../shared/raster';
 import type { Stroke } from '../shared/strokes';
 import { keyAction, isTyping } from '../shared/keys';
-import { Renderer, type FrameUniforms } from './gl';
+import { Renderer, type CellDraw, type FrameUniforms } from './gl';
 import { trailDecay, trailMatrix } from './trails';
+import { History, WALL_HISTORY_S, cellAspect, cellDelays, cellRects, cellSteps } from './wall';
 import { Debug } from './debug';
 import { Analyser } from './audio/analyser';
 import { idleFrame } from './audio/dsp';
@@ -75,13 +76,33 @@ function takeHits(): MetersMsg['envHits'] {
   for (const g of ENV_GROUPS) mod.envHits[g] = 0;
   return out;
 }
-function geomOf(motifA: number, motifB: number, morphT: number): Geom {
+/** With a wall the line is cut at the cell edge, so the zones and the stop measure against one cell. */
+function geomOf(motifA: number, motifB: number, morphT: number, cols: number, rows: number): Geom {
   const morphing = morphT > 0 && morphT < 1;
-  const short = Math.min(canvas.width, canvas.height);
   return {
     radius: morphing ? Math.max(radius[motifA] ?? 0, radius[motifB] ?? 0) : radius[motifA] ?? 0,
-    ax: canvas.width / short, ay: canvas.height / short, morphing,
+    ...cellAspect(canvas.width, canvas.height, cols, rows), morphing,
   };
+}
+
+/** The wall (design 2026-11-25 §6): past frame inputs, and the wave's steps for the current size and pattern. */
+const wallHistory = new History<FrameUniforms>(WALL_HISTORY_S);
+let wallSteps: { key: string; steps: number[] } = { key: '', steps: [0] };
+let wallClock = 0;
+function stepsFor(cols: number, rows: number, wave: WallWave): number[] {
+  const key = `${cols}x${rows}:${wave}`;
+  if (wallSteps.key !== key) wallSteps = { key, steps: cellSteps(cols, rows, wave, seed) };
+  return wallSteps.steps;
+}
+/** One draw per cell: the first-step cells show `now`, the others what was on screen `delay` seconds ago. */
+function wallCells(now: FrameUniforms, o: LookOptions, dt: number): CellDraw[] {
+  const { wallCols: cols, wallRows: rows } = o;
+  const rects = cellRects(canvas.width, canvas.height, cols, rows);
+  if (cols * rows === 1) { wallHistory.clear(); return [{ rect: rects[0], u: now }]; }
+  wallClock += dt;
+  wallHistory.push(wallClock, { ...now, params: new Float32Array(now.params), tilt: [now.tilt[0], now.tilt[1]] });
+  const delays = cellDelays(stepsFor(cols, rows, o.wallWave), o.wallDelay);
+  return rects.map((rect, i) => ({ rect, u: delays[i] > 0 ? wallHistory.at(wallClock - delays[i]) ?? now : now }));
 }
 /** Before the library is up: the baked shapes, minus the ones unchecked in storage. */
 const bakedPool = (): number[] => {
@@ -308,7 +329,7 @@ function frame(nowMs: number): void {
   const morphT = fb ? 0 : so.morphT;
 
   resize();
-  modulate(mod, look, session, audio, ap.driftT, dt, geomOf(motifA, motifB, morphT));
+  modulate(mod, look, session, audio, ap.driftT, dt, geomOf(motifA, motifB, morphT, look.options.wallCols, look.options.wallRows));
   lastLinger = mod.values[PARAM_INDEX.linger];
 
   const target = session.blackout ? 0 : 1;
@@ -320,7 +341,7 @@ function frame(nowMs: number): void {
 
   if (renderer) {
     renderer.resize(canvas.width, canvas.height);
-    if (wipe) renderer.clear();
+    if (wipe) { renderer.clear(); wallHistory.clear(); }
     const now: FrameUniforms = {
       params: mod.values,
       motifA, motifB, morphT,
@@ -330,7 +351,7 @@ function frame(nowMs: number): void {
     };
     const v = mod.values;
     renderer.draw(
-      [{ rect: [0, 0, canvas.width, canvas.height], u: now }],
+      wallCells(now, look.options, dt),
       { decay: fb ? 0 : trailDecay(v[PARAM_INDEX.trail], dt), m: trailMatrix(v[PARAM_INDEX.push], v[PARAM_INDEX.twist], dt) },
       { master, frame: frameNo++, grain: v[PARAM_INDEX.grain] },
     );
