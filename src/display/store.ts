@@ -4,7 +4,7 @@ import { GROUPS, PARAMS, type Group, type ParamId } from '../shared/params';
 import type { ControlMsg, LiveMsg, ShapeMsg } from '../shared/protocol';
 import {
   BANDS, CALIB_RANGES, ENV_KEYS, ENV_RANGES, HOLD_BEATS, HUE_JUMP_AMT_RANGE, HUE_JUMP_EVERY, MELT_MODES, MORPH_BEATS, ORDERS,
-  PRESET_CYCLE_MIN, PRESET_SLOTS, REACT_RANGE, SESSION_RANGES, STORAGE_KEYS, THR_RANGE,
+  PRESET_CYCLE_MIN, PRESET_SLOTS, REACT_RANGE, SESSION_RANGES, STORAGE_KEYS, THR_RANGE, WALL_DELAY_RANGE, WALL_SIZES, WALL_WAVES,
   defaultState, fallbackLook, isEnvGroup, loadPersisted, parseJson, safeGet, migratePresets, safeSet, serialiseCalib, serialiseLook,
   serialisePresets, type Calib, type Env as Envelope, type Look, type LookOptions, type Session, type State, type StorageLike,
 } from '../shared/state';
@@ -190,6 +190,9 @@ function setOption(model: Model, key: unknown, value: unknown): Model {
     case 'hueJumpAmt': if (isNum(value)) v = clamp(value, HUE_JUMP_AMT_RANGE[0], HUE_JUMP_AMT_RANGE[1]); break;
     case 'holdBeats': if (HOLD_BEATS.includes(value as never)) v = value as LookOptions['holdBeats']; break;
     case 'morphBeats': if (MORPH_BEATS.includes(value as never)) v = value as LookOptions['morphBeats']; break;
+    case 'wallCols': case 'wallRows': if (WALL_SIZES.includes(value as never)) v = value as number; break;
+    case 'wallWave': if (WALL_WAVES.includes(value as never)) v = value as LookOptions['wallWave']; break;
+    case 'wallDelay': if (isNum(value)) v = clamp(value, WALL_DELAY_RANGE[0], WALL_DELAY_RANGE[1]); break;
   }
   if (v === undefined) return model;
   return setLook(model, { ...model.state.look, options: { ...o, [key as keyof LookOptions]: v } });

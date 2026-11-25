@@ -37,7 +37,7 @@ export function mulberry32(seed: number): Rng {
 }
 
 /** One PRNG stream per subsystem (B7.5): seed plus a fixed offset. */
-export const STREAM_OFFSET = { sequencer: 1, autopilot: 2, presets: 3 } as const;
+export const STREAM_OFFSET = { sequencer: 1, autopilot: 2, presets: 3, wall: 4 } as const;
 export type Stream = keyof typeof STREAM_OFFSET;
 
 export function streamRng(seed: number, stream: Stream): Rng {

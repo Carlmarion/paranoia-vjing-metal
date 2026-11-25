@@ -11,6 +11,9 @@ export type HueJumpEvery = 0 | 1 | 2 | 4 | 8 | 16;
 export type HoldBeats = 0 | 16 | 32 | 64 | 128;
 export type MorphBeats = 4 | 8 | 16 | 32 | 64;
 
+/** How the wave crosses the wall: 0 rows (reading order), 1 snake, 2 centre outward, 3 diagonal, 4 random. */
+export type WallWave = 0 | 1 | 2 | 3 | 4;
+
 export interface LookOptions {
   meltMode: MeltMode; // 0 blend, 1 fuse, 2 spatial
   mirrorX: boolean;
@@ -19,6 +22,10 @@ export interface LookOptions {
   hueJumpAmt: number; // 0…0.5 turns
   holdBeats: HoldBeats;
   morphBeats: MorphBeats;
+  wallCols: number; // 1…WALL_MAX; 1×1 = no wall
+  wallRows: number;
+  wallWave: WallWave;
+  wallDelay: number; // seconds between one wave step and the next
 }
 
 /** Design §5: the groups that have a reaction envelope (melt and inner react directly). */
@@ -113,6 +120,11 @@ export const PRESET_CYCLE_MIN: PresetCycleMin[] = [0, 2, 5, 10];
 export const REACT_RANGE: [number, number] = [-1, 1];
 export const THR_RANGE: [number, number] = [0, 0.95];
 export const HUE_JUMP_AMT_RANGE: [number, number] = [0, 0.5];
+/** Most columns and rows of the wall. Lower it if the show laptop can't hold 60 fps (SPEC A3). */
+export const WALL_MAX = 8;
+export const WALL_SIZES: number[] = Array.from({ length: WALL_MAX }, (_, i) => i + 1);
+export const WALL_WAVES: WallWave[] = [0, 1, 2, 3, 4];
+export const WALL_DELAY_RANGE: [number, number] = [0, 1];
 
 export const SESSION_RANGES = {
   autopilot: [0, 1], reactMaster: [0, 2], xfade: [0, 8], holdPos: [0, 1],
@@ -130,7 +142,9 @@ export function defaultParamState(def: ParamDef): ParamState {
 }
 
 export function defaultOptions(): LookOptions {
-  return { meltMode: 1, mirrorX: false, mirrorY: false, hueJumpEvery: 0, hueJumpAmt: 0.25, holdBeats: 32, morphBeats: 16 };
+  return { meltMode: 1, mirrorX: false, mirrorY: false, hueJumpEvery: 0, hueJumpAmt: 0.25, holdBeats: 32, morphBeats: 16,
+    wallCols: 1, wallRows: 1, wallWave: 0, wallDelay: 0.12,
+  };
 }
 
 export function defaultLook(): Look {
@@ -210,6 +224,10 @@ export function migrateOptions(v: unknown): LookOptions {
     hueJumpAmt: num(v.hueJumpAmt, HUE_JUMP_AMT_RANGE[0], HUE_JUMP_AMT_RANGE[1], d.hueJumpAmt),
     holdBeats: oneOf(v.holdBeats, HOLD_BEATS, d.holdBeats),
     morphBeats: oneOf(v.morphBeats, MORPH_BEATS, d.morphBeats),
+    wallCols: oneOf(v.wallCols, WALL_SIZES, d.wallCols),
+    wallRows: oneOf(v.wallRows, WALL_SIZES, d.wallRows),
+    wallWave: oneOf(v.wallWave, WALL_WAVES, d.wallWave),
+    wallDelay: num(v.wallDelay, WALL_DELAY_RANGE[0], WALL_DELAY_RANGE[1], d.wallDelay),
   };
 }
 

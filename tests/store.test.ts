@@ -162,7 +162,7 @@ describe('messages', () => {
       { t: 'setOption', key: 'mirrorY', value: true }, { t: 'setOption', key: 'hueJumpEvery', value: 8 },
       { t: 'setOption', key: 'hueJumpAmt', value: 0.9 }, { t: 'setOption', key: 'holdBeats', value: 128 },
       { t: 'setOption', key: 'morphBeats', value: 4 });
-    expect(m.state.look.options).toEqual({ meltMode: 2, mirrorX: true, mirrorY: true, hueJumpEvery: 8, hueJumpAmt: 0.5, holdBeats: 128, morphBeats: 4 });
+    expect(m.state.look.options).toMatchObject({ meltMode: 2, mirrorX: true, mirrorY: true, hueJumpEvery: 8, hueJumpAmt: 0.5, holdBeats: 128, morphBeats: 4 });
   });
 
   test('setEnv: clamped to its range; bad group, key or value leaves the model untouched', () => {
@@ -548,5 +548,27 @@ describe('zero', () => {
     expect(m.state.session.ambient).toBe(false);
     for (const def of PARAMS) expect(m.state.look.params[def.id].react).toBe(0);
     expect(m.state.look.env.shape).toEqual({ attack: 0, sustain: 1, decay: 1, release: 0 });
+  });
+});
+
+describe('wall options', () => {
+  test('setOption accepts sizes 1…8, the five waves and a delay of 0…1 s', () => {
+    const m = apply(fresh(), { t: 'setOption', key: 'wallCols', value: 4 }, { t: 'setOption', key: 'wallRows', value: 8 },
+      { t: 'setOption', key: 'wallWave', value: 3 }, { t: 'setOption', key: 'wallDelay', value: 2 });
+    expect(m.state.look.options).toMatchObject({ wallCols: 4, wallRows: 8, wallWave: 3, wallDelay: 1 });
+  });
+
+  test('anything else is ignored', () => {
+    const m0 = fresh();
+    const m = apply(m0, { t: 'setOption', key: 'wallCols', value: 0 }, { t: 'setOption', key: 'wallCols', value: 9 },
+      { t: 'setOption', key: 'wallRows', value: 2.5 }, { t: 'setOption', key: 'wallWave', value: 5 }, { t: 'setOption', key: 'wallDelay', value: 'x' });
+    expect(m.state.look.options).toEqual(m0.state.look.options);
+  });
+
+  test('Reset all removes the wall; Zero and Randomize all leave it', () => {
+    const wall = apply(fresh(), { t: 'setOption', key: 'wallCols', value: 3 }, { t: 'setOption', key: 'wallWave', value: 2 });
+    expect(apply(wall, { t: 'cmd', name: 'reset' }).state.look.options.wallCols).toBe(1);
+    expect(apply(wall, { t: 'cmd', name: 'zero' }).state.look.options).toMatchObject({ wallCols: 3, wallWave: 2 });
+    expect(apply(wall, { t: 'cmd', name: 'randomize' }).state.look.options).toMatchObject({ wallCols: 3, wallWave: 2 });
   });
 });

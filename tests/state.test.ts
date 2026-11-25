@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { keyAction } from '../src/shared/keys';
 import { fromNorm, paramDef, toNorm } from '../src/shared/params';
-import { ENV_GROUPS, LOOK_VERSION, defaultLook, defaultSession, migrateLook, neutralEnv, serialiseLook } from '../src/shared/state';
+import { ENV_GROUPS, LOOK_VERSION, defaultLook, defaultSession, migrateLook, migrateOptions, neutralEnv, serialiseLook } from '../src/shared/state';
 import { clamp, clamp01 } from '../src/shared/math';
 
 describe('Look v2 zoom migration (design §4.1)', () => {
@@ -81,5 +81,20 @@ describe('tilt migration (wobble)', () => {
     const look = migrateLook({ params: {} });
     expect(look.params.tiltAmt).toEqual(defaultLook().params.tiltAmt);
     expect(look.params.tiltAngle).toEqual(defaultLook().params.tiltAngle);
+  });
+});
+
+describe('wall options (design 2026-11-25 §6.1)', () => {
+  test('an old Look has no wall', () => {
+    const old = JSON.parse(serialiseLook(defaultLook())) as { options: Record<string, unknown> };
+    for (const k of ['wallCols', 'wallRows', 'wallWave', 'wallDelay']) delete old.options[k];
+    expect(migrateLook(old).options).toMatchObject({ wallCols: 1, wallRows: 1, wallWave: 0, wallDelay: 0.12 });
+  });
+
+  test('invalid values fall back to the defaults', () => {
+    const o = migrateOptions({ wallCols: 0, wallRows: 2.5, wallWave: 'x', wallDelay: 'y' });
+    expect(o).toMatchObject({ wallCols: 1, wallRows: 1, wallWave: 0, wallDelay: 0.12 });
+    expect(migrateOptions({ wallCols: 9, wallDelay: 5 })).toMatchObject({ wallCols: 1, wallDelay: 1 });
+    expect(migrateOptions({ wallCols: 8, wallRows: 3, wallWave: 4, wallDelay: 0.5 })).toMatchObject({ wallCols: 8, wallRows: 3, wallWave: 4, wallDelay: 0.5 });
   });
 });
