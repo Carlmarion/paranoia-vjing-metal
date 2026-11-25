@@ -5,13 +5,19 @@ precision highp float;
 precision highp sampler2DArray;
 
 uniform sampler2DArray uSdf;
+uniform sampler2D uPrev;   // last frame's scene buffer (rgb = picture, a = luminance)
 uniform float uP[PARAM_COUNT];
-uniform vec2  uRes;
+uniform vec2  uRes;       // size of this cell in pixels (the whole buffer when the wall is 1×1)
+uniform vec2  uOrigin;    // lower-left pixel of this cell
+uniform vec2  uScreen;    // size of the whole buffer
+uniform mat2  uTrailM;    // window-centred position now → where it was last frame (trails.ts)
+uniform float uTrailDecay; // 0 = trails off
+uniform float uFloor;     // subtracted from the echo each frame: 1/255 on 8-bit buffers, else 0
 uniform float uMotifA, uMotifB, uMorphT;
 uniform int   uMeltMode;
 uniform bool  uMirrorX, uMirrorY;
 uniform vec2  uTilt; // wobble lean (tiltX, tiltY), computed by modulation.ts
-uniform float uWarpPhase, uSpikePhase, uWavePhase, uSpinPhase, uHueOffset, uMaster, uFrame;
+uniform float uWarpPhase, uSpikePhase, uWavePhase, uSpinPhase, uHueOffset;
 
 out vec4 fragColor;
 
@@ -50,8 +56,8 @@ float sdf(vec2 p, float layer) {
 }
 
 void main() {
-  // ---------- 1. Screen space: short side spans −1…+1 ----------
-  vec2 s = (gl_FragCoord.xy - 0.5 * uRes) / (0.5 * min(uRes.x, uRes.y));
+  // ---------- 1. Screen space: the cell's short side spans −1…+1 ----------
+  vec2 s = (gl_FragCoord.xy - uOrigin - 0.5 * uRes) / (0.5 * min(uRes.x, uRes.y));
   vec2 p = s;
 
   // ---------- 2. Tilt, mirror, rotate (+ spin), zoom ----------
@@ -102,7 +108,13 @@ void main() {
   float lum = mask * inner + (1.0 - mask) * g;
   vec3 col = rgb * lum * P_BRIGHTNESS;
 
-  // ---------- 11. Grain, master fade ----------
-  col += (hash(gl_FragCoord.xy + vec2(127.0, 311.0) * uFrame) - 0.5) * P_GRAIN * (0.15 + lum);
-  fragColor = vec4(clamp(col, 0.0, 1.0) * uMaster, 1.0);
+  // ---------- 11. Trails: the last frame, moved and faded (grain and master are in show.frag) ----------
+  vec4 echo = vec4(0.0);
+  if (uTrailDecay > 0.0) {
+    float half_ = 0.5 * min(uScreen.x, uScreen.y);
+    vec2 was = uTrailM * ((gl_FragCoord.xy - 0.5 * uScreen) / half_);
+    vec2 uv = (was * half_ + 0.5 * uScreen) / uScreen;
+    if (uv == clamp(uv, 0.0, 1.0)) echo = max(texture(uPrev, uv) * uTrailDecay - uFloor, 0.0);
+  }
+  fragColor = max(vec4(col, lum), echo);
 }

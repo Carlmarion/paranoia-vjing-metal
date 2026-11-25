@@ -7,7 +7,8 @@ import { inkRadius } from '../shared/sdf';
 import { drawStrokes } from '../shared/raster';
 import type { Stroke } from '../shared/strokes';
 import { keyAction, isTyping } from '../shared/keys';
-import { Renderer } from './gl';
+import { Renderer, type FrameUniforms } from './gl';
+import { trailDecay, trailMatrix } from './trails';
 import { Debug } from './debug';
 import { Analyser } from './audio/analyser';
 import { idleFrame } from './audio/dsp';
@@ -161,7 +162,10 @@ function apply(msg: unknown): void {
   const r = reduce(model, msg, { rng: presetsRng, nowMs: Date.now(), shapes: library ?? bakedOnly });
   model = r.model;
   for (const e of r.effects) {
-    if (e.t === 'seq') seq.command(e.cmd);
+    if (e.t === 'seq') {
+      if (e.cmd.name === 'replay' && e.cmd.fromBlank) wipe = true; // B7.6: the drawing appears on black, with no old echo
+      seq.command(e.cmd);
+    }
     else if (e.t === 'seqForget') seq.forget(e.layer);
     else if (e.t === 'library') library?.handle(e.msg);
     else if (e.t === 'sendState') { sendState(); if (library) transport.send(library.meta()); }
@@ -265,6 +269,9 @@ const autopilot = new Autopilot(seed);
 const mod = createModulation();
 let lastLinger = 0.5;
 let master = 1;
+/** Empty the scene buffers before the next draw (design 2026-11-25 §4.2). */
+let wipe = false;
+let wasFallback = false;
 let frameNo = 0;
 let lastMs = performance.now();
 const startMs = lastMs;
@@ -307,15 +314,28 @@ function frame(nowMs: number): void {
   const target = session.blackout ? 0 : 1;
   master = clamp(master + Math.sign(target - master) * (dt / BLACKOUT_FADE_S), 0, 1);
 
+  // no echo survives a full blackout or a change of Fallback
+  if (master === 0 || fb !== wasFallback) wipe = true;
+  wasFallback = fb;
+
   if (renderer) {
-    renderer.draw({
-      params: mod.values, res: [canvas.width, canvas.height],
+    renderer.resize(canvas.width, canvas.height);
+    if (wipe) renderer.clear();
+    const now: FrameUniforms = {
+      params: mod.values,
       motifA, motifB, morphT,
       meltMode: look.options.meltMode, mirrorX: look.options.mirrorX, mirrorY: look.options.mirrorY,
       warpPhase: mod.warpPhase, spikePhase: mod.spikePhase, wavePhase: mod.wavePhase, spinPhase: mod.spinPhase, tilt: mod.tilt,
-      hueOffset: fb ? 0 : ap.hueOffset, master, frame: frameNo++,
-    });
+      hueOffset: fb ? 0 : ap.hueOffset,
+    };
+    const v = mod.values;
+    renderer.draw(
+      [{ rect: [0, 0, canvas.width, canvas.height], u: now }],
+      { decay: fb ? 0 : trailDecay(v[PARAM_INDEX.trail], dt), m: trailMatrix(v[PARAM_INDEX.push], v[PARAM_INDEX.twist], dt) },
+      { master, frame: frameNo++, grain: v[PARAM_INDEX.grain] },
+    );
   }
+  wipe = false;
   persister.update(model.state, nowMs, model.ambientStash);
 
   const error = fatal ?? renderer?.error ?? audioError ?? (renderer ? null : 'WebGL context lost');
