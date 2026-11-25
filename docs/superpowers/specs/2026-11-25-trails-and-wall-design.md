@@ -43,7 +43,7 @@ Both need the same change underneath: the picture is drawn into an off-screen bu
 - **C. Trails in the distance field** (remember the shape's past positions as distances). Fits the "melt" idea but can't remember colour and needs a second buffer format. Too much for the gain.
 
 **Wall**
-- **A. One draw per cell from a history of past frames (chosen).** The Display keeps the last 16 s of frame inputs in memory. Each cell is drawn with its own viewport and the inputs from `now − its delay`. Everything is late together: reactions, phases, colour, and the melt. The shader only needs to know where its cell is. At most 64 small draws that together cover the same pixels as one full-screen draw.
+- **A. One draw per cell from a history of past frames (chosen).** The Display keeps the last 6 s of frame inputs in memory. Each cell is drawn with its own viewport and the inputs from `now − its delay`. Everything is late together: reactions, phases, colour, and the melt. The shader only needs to know where its cell is. At most 64 small draws that together cover the same pixels as one full-screen draw.
 - **B. Tile inside the shader and read past values from a history texture.** One draw, but every pixel reads all ~35 values from a texture, and the shader's parameter macros must all change. More risk, more GPU work, no visible gain.
 - **C. Delay only a "pulse" value per cell.** Simple, but the melt can't travel, and that is the part Carl liked most.
 
@@ -153,11 +153,11 @@ Each cell gets a whole-number **step**; its delay is `step × wallDelay`. Row 0 
 | diagonal | `col + row` |
 | random | a shuffle of `0…cells−1`, fixed for a given seed, `cols` and `rows`; its own random stream (`streamRng(seed, 'wall')`), never one of the existing streams |
 
-If the largest delay would pass `WALL_HISTORY_S = 16` s, all delays are scaled down so the last cell is 16 s late.
+If the largest delay would pass `WALL_HISTORY_S = 6` s (Carl: 6 seconds at most), all delays are scaled down so the last cell is 6 s late.
 
 ### 6.4 History
 
-- A new `src/display/wall.ts` keeps a ring of the frame inputs (`FrameUniforms`, copied, with the time they were made) covering the last 16 s. It records only while the wall is larger than 1×1, and has a `clear()` used by §4.2.
+- A new `src/display/wall.ts` keeps a ring of the frame inputs (`FrameUniforms`, copied, with the time they were made) covering the last 6 s. It records only while the wall is larger than 1×1, and has a `clear()` used by §4.2.
 - A cell draws with the newest snapshot that is at least its delay old; when history is shorter than that, the oldest one.
 - Everything in the snapshot is late together: slider values, phases, tilt, hue offset, the two shape layers and the melt position. So the next shape sweeps across the wall cell by cell.
 - **Not delayed:** the trail values (§5.2), grain and master (show pass), meters and everything the dashboard shows, the sequencer, and the contents of the shape layers. A late cell that still points at a layer whose drawing has since changed (live drawing, a deleted shape) shows what the layer holds now. Live drawing therefore appears in all cells at once. Accepted.
@@ -177,7 +177,7 @@ With a wall, the line is cut at the **cell** edge, so the zoom and mirror-shift 
 
 **Automated (vitest, pure modules)**
 - `trails.ts`: decay is 0 at `trail = 0`; two half-steps equal one full step (frame-rate independence) for decay, scale and turn; the matrix is the identity at `push = twist = 0`.
-- `wall.ts`: cell rectangles tile the buffer exactly for sizes that don't divide; steps for each wave on a 3×2 and a 4×4 wall; the random wave is a permutation and repeats for the same seed; delays are capped at 16 s; history returns the right snapshot, and the oldest when too short.
+- `wall.ts`: cell rectangles tile the buffer exactly for sizes that don't divide; steps for each wave on a 3×2 and a 4×4 wall; the random wave is a permutation and repeats for the same seed; delays are capped at 6 s; history returns the right snapshot, and the oldest when too short.
 - Presets: an old Look gets the trail defaults and a 1×1 wall; Zero zeroes the trail bases and keeps the wall; Randomize all never changes `trail` or the wall options; Mutate all never changes `trail`, the trails-group Mutate does.
 - Zones use the cell size when the wall is on.
 
