@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
   Persister, initialModel, patchSession, recallPreset, reduce, renderLook, tick, withDefaultPresets, type Env, type Model,
 } from '../src/display/store';
-import { savePreset } from '../src/display/presets';
+import { ZERO_FADE_S, savePreset } from '../src/display/presets';
 import { AMBIENT_FADE_S, ambientLook } from '../src/display/ambient';
 import {
   STORAGE_KEYS, defaultCalib, defaultLook, migrateZoomReact, defaultSession, fallbackLook, serialiseCalib, serialiseLook, serialisePresets,
@@ -524,5 +524,29 @@ describe('Ambient: final review fixes', () => {
     expect(all.state.look.params.zoom.react).toBe(defaultLook().params.zoom.react);
     const group = on(apply(on(a), { t: 'cmd', name: 'reset', arg: 'colour' }));
     expect(group.state.look.params.zoom.react).toBe(0.3);
+  });
+});
+
+describe('zero', () => {
+  const lively = (): Model => apply(fresh(), { t: 'setSession', key: 'autopilot', value: 0.7 }, { t: 'setSession', key: 'presetCycleMin', value: 5 }, { t: 'setParam', id: 'warpAmt', field: 'base', value: 0.1 });
+
+  test('fades to a plain line over 1 s, stops the autopilot, and undo brings the Look back', () => {
+    const m0 = lively();
+    const m = apply(m0, { t: 'cmd', name: 'zero' });
+    expect(m.state.look.params.warpAmt.base).toBe(0);
+    expect(m.state.look.params.glow.react).toBe(0);
+    expect(m.state.look.params.zoom.base).toBe(m0.state.look.params.zoom.base);
+    expect(m.state.session.autopilot).toBe(0);
+    expect(m.state.session.presetCycleMin).toBe(0); // a cycle recall would overwrite the look being built
+    expect(m.fade?.dur).toBe(ZERO_FADE_S);
+    const back = apply(m, { t: 'cmd', name: 'undo' });
+    expect(back.state.look).toEqual(m0.state.look);
+  });
+
+  test('while Ambient is on, Zero leaves nothing owed: Off stays at zero', () => {
+    const m = apply(lively(), { t: 'cmd', name: 'ambient' }, { t: 'cmd', name: 'zero' }, { t: 'cmd', name: 'ambient' });
+    expect(m.state.session.ambient).toBe(false);
+    for (const def of PARAMS) expect(m.state.look.params[def.id].react).toBe(0);
+    expect(m.state.look.env.shape).toEqual({ attack: 0, sustain: 1, decay: 1, release: 0 });
   });
 });

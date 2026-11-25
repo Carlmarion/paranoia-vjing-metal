@@ -50,7 +50,8 @@ export type CmdName =
   | 'randomize' | 'mutate' | 'reset' | 'undo'
   | 'savePreset' | 'loadPreset' | 'deletePreset' | 'renamePreset' | 'importPresets'
   | 'replay' // arg: the ShapeKey of a drawn shape (B12.6)
-  | 'ambient'; // toggles Ambient mode (design §6)
+  | 'ambient' // toggles Ambient mode (design §6)
+  | 'zero'; // B8 Zero: a plain, still line to build up from
 
 /** Stable identity of a library shape (B12.3); layers are for the shader and the sequencer only. */
 export type ShapeKey = `baked:${number}` | `drawn:${string}`;

@@ -49,6 +49,7 @@ describe('Look.env migration (design §5.3)', () => {
 describe('keys', () => {
   test('A toggles Ambient', () => {
     expect(keyAction('a', null)).toEqual({ kind: 'msg', msg: { t: 'cmd', name: 'ambient' } });
+    expect(keyAction('0', null)).toEqual({ kind: 'msg', msg: { t: 'cmd', name: 'zero' } });
     expect(keyAction('A', null)).toEqual({ kind: 'msg', msg: { t: 'cmd', name: 'ambient' } });
   });
 });

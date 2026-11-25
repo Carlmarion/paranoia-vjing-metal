@@ -512,6 +512,7 @@ The live layer (`LIVE = MAX_LAYERS − 1`) is a motif like any other for the sha
 - **Default Look options:** `meltMode` 1 (fuse), `mirrorX` false, `mirrorY` false, `hueJumpEvery` 0, `hueJumpAmt` 0.25, `holdBeats` 32, `morphBeats` 16.
 - **Randomize(group?)** for every unlocked param (optionally only one group): `base` uniform in the rand range (log-uniform for log params); `react` uniform in 0…0.6 × `reactScale`, sign positive; `band` = table default with probability 0.5, else uniform among low, mid, high, beat, energy; `thr` uniform in 0…0.5. Options: `meltMode` uniform; `mirrorX`, `mirrorY` true with probability 0.25 each. Never touches `brightness`, `holdBeats`, `morphBeats`, `hueJumpEvery`.
 - **Mutate:** for every unlocked param, `base_norm += N(0, 0.08)`, `react += N(0, 0.1 × reactScale)`, `thr += N(0, 0.05)`, all clamped. Options unchanged. This is the tool for walking around a sweet spot.
+- **Zero** (key `0`): a plain, still line to build a look up from. Every `react` → 0; the bases of `rotation`, `spin`, `tiltAmt`, `tiltSpeed`, `mirrorShift`, `warpAmt`, `spikeAmp`, `waveAmt`, `ripple`, `glow`, `grain` → 0; all envelopes neutral; `hueJumpEvery` → 0; `session.autopilot` → 0 and `session.presetCycleMin` → 0 (a cycle recall would overwrite the look being built). Colour, thickness, zoom, brightness, the melt settings, the other options and locked params stay. Crossfades over 1 s. Undo restores the Look (not the autopilot or the preset cycle). While Ambient is on it is a whole new Look: nothing stays owed.
 - **Reset(group?)**: back to table defaults. Reset of shape, line or colour also sets that group's envelope to neutral; Reset all sets all three.
 - **Envelopes** are part of the Look: recall crossfades their four numbers linearly; randomize and mutate never touch them.
 - **Undo:** ring of 30 Looks, pushed before randomize, mutate, reset and recall. Undo crossfades over 1 s.
@@ -535,7 +536,7 @@ For when the music turns ambient: one press calms everything driven by the kick,
 { t: 'setParam', id: ParamId, field: 'base' | 'react' | 'band' | 'thr' | 'lock', value }
 { t: 'setOption', key, value }  { t: 'setSession', key, value }  { t: 'setCalib', key, value }
 { t: 'setEnv', group: 'shape' | 'line' | 'colour', key: keyof Env, value: number }   // clamped to the B3 ranges
-{ t: 'cmd', name: 'next' | 'prev' | 'random' | 'goto' | 'queue' | 'randomize' | 'mutate' | 'reset' | 'undo' | 'ambient'
+{ t: 'cmd', name: 'next' | 'prev' | 'random' | 'goto' | 'queue' | 'randomize' | 'mutate' | 'reset' | 'undo' | 'ambient' | 'zero'
               | 'savePreset' | 'loadPreset' | 'deletePreset' | 'renamePreset' | 'importPresets'
               | 'replay', arg? }                                    // replay: arg = ShapeKey of a drawn shape
 // shapes (B12)
@@ -601,7 +602,7 @@ The shape, line and colour headers also hold a **mini curve** (64×18 px) of the
 
 **Right column: performance**
 - 16 preset slots (click = recall, shift-click = overwrite, right-click = rename or delete). Save button.
-- Randomize all, Mutate all, Undo, Reset all.
+- Randomize all, Mutate all, Undo, Reset all, **Zero (0)**.
 - **Ambient (A)** toggle, lit while on (B8.1); the top bar shows `AMBIENT` while on.
 - Sliders: `autopilot`, `reactMaster`, `xfade`. Toggle: **Zoom stop** (`session.zoomStop`). Select: `presetCycleMin`.
 - Export, Import.
@@ -618,7 +619,7 @@ The shape, line and colour headers also hold a **mini curve** (64×18 px) of the
 | B | Fallback | 1–9 | Recall preset |
 | K | Blackout | D | Debug overlay (Display) |
 | Enter | Fullscreen (Display) | P | Draw (Control) |
-| A | Ambient on / off | | |
+| A | Ambient on / off | 0 | Zero |
 
 While the drawing modal is open, the dashboard keys above are off and the modal's own keys (B12.1) apply.
 

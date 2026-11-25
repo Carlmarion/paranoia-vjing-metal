@@ -11,8 +11,8 @@ import {
 import { clamp, type Rng } from '../shared/math';
 import type { SeqCommand } from './sequencer';
 import {
-  UNDO_FADE_S, cloneLook, deletePreset, fadeLook, importPresets, mutate, popUndo, pushUndo, randomize,
-  renamePreset, resetLook, savePreset, startFade, stepFade, type Fade, type UndoEntry,
+  UNDO_FADE_S, ZERO_FADE_S, cloneLook, deletePreset, fadeLook, importPresets, mutate, popUndo, pushUndo, randomize,
+  renamePreset, resetLook, savePreset, startFade, stepFade, zeroLook, type Fade, type UndoEntry,
 } from './presets';
 import { AMBIENT_FADE_S, ambientLook, ambientRestore, migrateAmbientStash, type AmbientStash } from './ambient';
 
@@ -258,6 +258,8 @@ function cmd(model: Model, name: unknown, arg: unknown, env: Env): Result {
       return none(changeLook(model, mutate(s.look, env.rng, group, s.session.ambient), xfade));
     case 'reset':
       return none(replaceLook(model, resetLook(s.look, group), xfade, group !== undefined));
+    case 'zero': // a whole new Look: while Ambient is on nothing stays owed
+      return none(patchSession(replaceLook(model, zeroLook(s.look), ZERO_FADE_S), { autopilot: 0, presetCycleMin: 0 }));
     case 'ambient':
       return none(toggleAmbient(model));
     case 'undo': {

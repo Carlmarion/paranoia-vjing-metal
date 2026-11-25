@@ -200,6 +200,27 @@ export function resetLook(look: Look, group?: Group): Look {
   return out;
 }
 
+export const ZERO_FADE_S = 1;
+
+/** The effect amounts Zero sets to 0. Colour, thickness, zoom and the melt settings stay as they are. */
+export const ZERO_BASES: readonly ParamId[] = [
+  'rotation', 'spin', 'tiltAmt', 'tiltSpeed', 'mirrorShift', 'warpAmt', 'spikeAmp', 'waveAmt', 'ripple', 'glow', 'grain',
+];
+
+/** B8 Zero: a plain, still line to build up from. No reaction, no effect amount, neutral envelopes, no hue jumps. Locked params stay. */
+export function zeroLook(look: Look): Look {
+  const out = cloneLook(look);
+  for (const def of PARAMS) {
+    const ps = out.params[def.id];
+    if (ps.lock) continue;
+    ps.react = 0;
+    if (ZERO_BASES.includes(def.id)) ps.base = 0;
+  }
+  out.env = neutralEnvs();
+  out.options.hueJumpEvery = 0;
+  return out;
+}
+
 // ---------- undo ----------
 
 /** Design §6.2: each entry records whether it was pushed while Ambient was on, and what Ambient owed then. */

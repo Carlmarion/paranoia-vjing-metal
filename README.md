@@ -55,6 +55,7 @@ In the dashboard, press **Draw** (or `P`). The modal always opens in not-live mo
 - **Zoom zones:** the zoom and mirror-shift sliders are coloured green, orange (the glow touches the window edge), red (the line does). **Zoom stop** (on by default) keeps the kick and the autopilot from pushing past red; your hand is never limited.
 - **Envelopes:** the small curve in the shape, line and colour headers opens an attack / sustain / release editor. A = how fast an effect rises, S = how far it sags while the sound goes on (fatigue), R = how long it lingers. Each trigger draws a thin line along the curve; `hits/s` shows how often the group fires.
 - **Ambient** (`A`): calms everything driven by the kick, the beat and the highs over 5 s and lengthens the tails. Re-add reactions by hand; `A` again gives the rest back. Survives a Display reload.
+- **Zero** (`0`): a plain, still line. Every reaction and effect amount goes to 0, and the autopilot and the preset cycle stop; colour, thickness and zoom stay. Build the look up from there; Undo brings the old one back.
 - **Colour strip** (top of the colour panel): drag **glow** and **core** to set the two at-rest colours; drag between them to move both. The bright bracket shows the colours on screen right now.
 
 ## Show day

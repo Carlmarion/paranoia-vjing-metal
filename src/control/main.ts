@@ -326,6 +326,8 @@ button('Randomize all', () => cmd('randomize'), lookRow);
 button('Mutate all', () => cmd('mutate'), lookRow);
 button('Undo', () => cmd('undo'), lookRow);
 button('Reset all', () => cmd('reset'), lookRow, 'danger');
+button('Zero (0)', () => cmd('zero'), lookRow, 'danger').title =
+  'a plain, still line: every reaction and effect amount to 0, autopilot and preset cycle off; colour, thickness and zoom stay; Undo brings it back';
 
 h('h2', '', 'Performance', right);
 const ds = defaultSession();

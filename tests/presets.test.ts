@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   cloneLook, exportFilename, exportPresets, fadeLook, importPresets, lerpLook, mutate, popUndo, presetName, pushUndo,
-  randomize, renamePreset, deletePreset, resetLook, savePreset, startFade, stepFade, UNDO_SIZE,
+  randomize, renamePreset, deletePreset, resetLook, savePreset, startFade, stepFade, zeroLook, UNDO_SIZE, ZERO_BASES,
 } from '../src/display/presets';
 import { GROUPS, PARAMS, paramDef } from '../src/shared/params';
 import { ENV_GROUPS, defaultLook, defaultOptions, emptyPresets, migratePresets, neutralEnv, type Look } from '../src/shared/state';
@@ -194,6 +194,43 @@ describe('reset', () => {
     const all = resetLook(l);
     expect(all.params.hue).toEqual({ ...defaultLook().params.hue, lock: true });
     expect(all.options).toEqual(defaultOptions());
+  });
+});
+
+describe('zero', () => {
+  test('every reaction and effect amount goes to 0; envelopes neutral; hue jumps off', () => {
+    const l = lookedUp();
+    l.params.warpAmt.base = 0.1;
+    l.params.glow.base = 0.6;
+    l.env.shape = { attack: 0.5, sustain: 0.4, decay: 2, release: 3 };
+    l.options.hueJumpEvery = 4;
+    const z = zeroLook(l);
+    for (const def of PARAMS) if (def.id !== 'hue') expect(z.params[def.id].react).toBe(0);
+    for (const id of ZERO_BASES) expect(z.params[id].base).toBe(0);
+    for (const g of ENV_GROUPS) expect(z.env[g]).toEqual(neutralEnv());
+    expect(z.options.hueJumpEvery).toBe(0);
+  });
+
+  test('colour, thickness, zoom, melt, mirrors and the other options stay; the input is not changed', () => {
+    const l = lookedUp();
+    l.params.thickness.base = 0.03;
+    l.params.sat.base = 0.5;
+    l.options.mirrorX = true;
+    const before = cloneLook(l);
+    const z = zeroLook(l);
+    for (const id of ['zoom', 'thickness', 'sat', 'brightness', 'hueDepth', 'meltK', 'linger', 'glowWidth', 'spikeFreq'] as const) {
+      expect(z.params[id].base).toBe(l.params[id].base);
+    }
+    expect(z.options).toEqual({ ...l.options, hueJumpEvery: 0 });
+    expect(l).toEqual(before);
+  });
+
+  test('a locked slider is left alone, reaction included', () => {
+    const l = lookedUp();
+    l.params.warpAmt = { base: 0.1, react: 0.5, band: 'mid', thr: 0.2, lock: true };
+    const z = zeroLook(l);
+    expect(z.params.warpAmt).toEqual(l.params.warpAmt);
+    expect(z.params.hue).toEqual(l.params.hue);
   });
 });
 
